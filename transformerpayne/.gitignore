@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Regenerable run artifacts (produced by running the notebook)
+rf_*.joblib
+*_desi_predictions.csv
+milestone_results.txt
+
+# OS
+.DS_Store
+Thumbs.db
