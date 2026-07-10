@@ -1,0 +1,46 @@
+# ============================================================================
+# Spectral Interpretability — dependencies / dependencias
+# For / Para: transformerpayne_y_rf.ipynb + project_lib.py
+#
+# EN: Recommended install in a fresh conda environment with Python 3.10:
+# ES: Instalacion recomendada en un entorno conda nuevo con Python 3.10:
+#     conda create -n astro-jax python=3.10 -y
+#     conda activate astro-jax
+#     pip install -r requirements.txt
+#     python -m ipykernel install --user --name astro-jax --display-name "Python (astro-jax)"
+#
+# EN: Then select the "Python (astro-jax)" kernel for the notebook in VS Code.
+# ES: Luego selecciona el kernel "Python (astro-jax)" para el notebook en VS Code.
+#
+# EN: Note - on Windows, jaxlib==0.4.38 wheels exist only for Python 3.10-3.12
+#     (not 3.13/3.14); numpy < 2 is required for transformer-payne compatibility.
+# ES: Nota - en Windows, las wheels de jaxlib==0.4.38 solo existen para
+#     Python 3.10-3.12 (no 3.13/3.14); numpy < 2 es necesario por compatibilidad
+#     con transformer-payne.
+#
+# EN: First run downloads the TransformerPayne weights (~7.5 MB) -> needs internet once.
+# ES: La primera ejecucion descarga los pesos de TransformerPayne (~7.5 MB) -> requiere internet una vez.
+# ============================================================================
+
+# EN: Spectral emulator            | ES: Emulador de espectros
+transformer-payne==0.10
+huggingface-hub          # EN: downloads the emulator weights | ES: descarga los pesos del emulador
+
+# EN/ES: JAX (CPU) - tested, compatible combination / combinacion probada y compatible
+jax==0.4.38
+jaxlib==0.4.38
+
+# EN: Scientific stack             | ES: Stack cientifico
+numpy<2
+pandas
+scipy                    # continuum_normalize (percentile_filter)
+matplotlib
+seaborn
+scikit-learn
+joblib                   # EN: save/load the RF model | ES: guardar/cargar el modelo RF
+
+# EN: Real DESI spectra (SPARCL / NOIRLab Astro Data Lab)
+# ES: Espectros DESI reales (SPARCL / NOIRLab Astro Data Lab)
+sparclclient
+astropy
+astro-datalab            # EN: DESI x Gaia x MWS query for 00_fetch_desi.py | ES: q

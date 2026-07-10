@@ -96,6 +96,52 @@ def continuum_normalize(flux, window=151, percentile=88):
     return flux / continuum
 
 
+def continuum_normalize_iter(flux, deg=4, niter=5, low_sigma=1.5, high_sigma=3.0):
+    """ES: Normalizacion de continuo MEJORADA (siguiente paso del domain shift).
+        Ajusta un polinomio de grado bajo al continuo con recorte sigma ASIMETRICO:
+        en cada iteracion descarta los puntos muy por DEBAJO del ajuste (lineas de
+        absorcion) y los outliers muy por encima (rayos cosmicos / emision), y
+        reajusta. Asi el continuo sigue la envolvente superior de forma robusta y
+        con la MISMA forma para sim y real, reduciendo el offset de continuo que
+        el filtro de percentil dejaba entre ambos (la causa del gap sim->real que
+        el ensanchamiento no cerraba). Reemplazo directo de `continuum_normalize`.
+    EN: IMPROVED continuum normalization (next step against the domain shift). Fits
+        a low-order polynomial continuum with ASYMMETRIC sigma clipping: each
+        iteration rejects points far BELOW the fit (absorption lines) and outliers
+        far above (cosmics / emission), then refits. The continuum thus tracks the
+        upper envelope robustly and with the SAME shape for sim and real, reducing
+        the continuum offset that the percentile filter left between them (the cause
+        of the sim->real gap that broadening did not close). Drop-in replacement for
+        `continuum_normalize` (same call signature `f(flux)`).
+    """
+    flux = np.asarray(flux, dtype=float)
+    n = len(flux)
+    # ES: x escalado a [-1, 1] para estabilidad numerica del polyfit
+    # EN: x scaled to [-1, 1] for numerical stability of polyfit
+    x = np.linspace(-1.0, 1.0, n)
+    mask = np.isfinite(flux)
+    if mask.sum() <= deg + 1:
+        return flux / np.nanmedian(flux[mask]) if mask.any() else flux
+    for _ in range(niter):
+        coef = np.polyfit(x[mask], flux[mask], deg)
+        cont = np.polyval(coef, x)
+        resid = flux - cont
+        std = np.std(resid[mask])
+        if std == 0:
+            break
+        # ES: recorte asimetrico (absorcion abajo, cosmicos arriba)
+        # EN: asymmetric clip (absorption below, cosmics above)
+        new_mask = np.isfinite(flux) & (resid > -low_sigma * std) & (resid < high_sigma * std)
+        if new_mask.sum() <= deg + 1 or new_mask.sum() == mask.sum():
+            mask = new_mask if new_mask.sum() > deg + 1 else mask
+            break
+        mask = new_mask
+    coef = np.polyfit(x[mask], flux[mask], deg)
+    cont = np.polyval(coef, x)
+    cont[cont == 0] = np.nan
+    return flux / cont
+
+
 # --------------------------------------------------------------------------
 # NEXT STEP 1 - ES: Ensanchamiento instrumental (LSF) | EN: Instrumental (LSF) broadening
 # --------------------------------------------------------------------------
@@ -190,7 +236,8 @@ def broaden_to_resolution(wave, flux, R):
 # --------------------------------------------------------------------------
 def generate_simulated(emulator, spectral_type, n=80, sigma_noise=0.02,
                        wave_grid=WAVE_GRID, mu=1.0, random_seed=0,
-                       broaden_fwhm_A=None, broaden_R=None, oversample=6):
+                       broaden_fwhm_A=None, broaden_R=None, oversample=6,
+                       normalizer=None):
     """ES: Genera `n` espectros simulados de un tipo espectral en la grilla comun.
         Misma grilla para todas las clases (B4); ruido UNIFICADO en el espacio
         ya normalizado (mismo nivel para F/G/K, evita fuga por el ruido); mismo
@@ -218,6 +265,11 @@ def generate_simulated(emulator, spectral_type, n=80, sigma_noise=0.02,
     rng = random.Random(random_seed)
     nprng = np.random.RandomState(random_seed)
     t_min, t_max = TEFF_RANGES[spectral_type]
+    # ES: normalizador de continuo (por defecto el de percentil, para no cambiar
+    #     resultados previos); se aplica IGUAL a sim y real | EN: continuum
+    #     normalizer (default = percentile, to preserve previous results); applied
+    #     IDENTICALLY to sim and real.
+    norm_fn = normalizer or continuum_normalize
 
     # NEXT STEP 1b - ES: R(lambda) dependiente de lambda (acepta "desi")
     #                EN: wavelength-dependent R(lambda) (accepts "desi")
@@ -251,7 +303,7 @@ def generate_simulated(emulator, spectral_type, n=80, sigma_noise=0.02,
             intensity = gaussian_lsf_broaden(gen_wave, intensity, broaden_fwhm_A)
             intensity = np.interp(wave_grid, gen_wave, intensity)
         # ES: normalizar y luego anadir ruido | EN: normalize then add noise
-        norm = continuum_normalize(intensity)
+        norm = norm_fn(intensity)
         norm = norm + nprng.normal(0.0, sigma_noise, size=norm.shape)
         rows.append({
             "spectral_type": spectral_type,
@@ -265,7 +317,8 @@ def generate_simulated(emulator, spectral_type, n=80, sigma_noise=0.02,
 
 def build_balanced_dataset(emulator, classes=("G", "K"), n_per_class=80,
                            sigma_noise=0.02, base_seed=100,
-                           broaden_fwhm_A=None, broaden_R=None, oversample=6):
+                           broaden_fwhm_A=None, broaden_R=None, oversample=6,
+                           normalizer=None):
     """ES: Dataset balanceado (mismo n por clase) en la grilla comun.
     EN: Balanced dataset (same n per class) on the common grid.
 
@@ -279,7 +332,8 @@ def build_balanced_dataset(emulator, classes=("G", "K"), n_per_class=80,
                                       random_seed=base_seed + i,
                                       broaden_fwhm_A=broaden_fwhm_A,
                                       broaden_R=broaden_R,
-                                      oversample=oversample))
+                                      oversample=oversample,
+                                      normalizer=normalizer))
     return pd.concat(dfs, ignore_index=True)
 
 
@@ -317,7 +371,7 @@ def fetch_desi_stars(n=60, data_release="DESI-DR1", connect_timeout=30,
     return records
 
 
-def clean_desi_spectrum(rec, wave_grid=WAVE_GRID):
+def clean_desi_spectrum(rec, wave_grid=WAVE_GRID, normalizer=None):
     """ES: Limpia y remuestrea un espectro DESI a la grilla comun en reposo:
         1) a reposo lambda/(1+z); 2) enmascarar pixeles malos (mask!=0 o ivar<=0);
         3) interpolar NaN + normalizar continuo; 4) remuestrear a WAVE_GRID.
@@ -338,7 +392,8 @@ def clean_desi_spectrum(rec, wave_grid=WAVE_GRID):
     if good.sum() < 0.5 * len(flux):
         return None
     flux_interp = np.interp(wave, wave[good], flux[good])
-    norm = continuum_normalize(flux_interp)
+    norm_fn = normalizer or continuum_normalize
+    norm = norm_fn(flux_interp)
     return np.interp(wave_grid, wave, norm)
 
 
@@ -357,7 +412,8 @@ def build_desi_dataset(n=60, wave_grid=WAVE_GRID, **kwargs):
 
 
 def load_desi_csv(path, wave_col=None, flux_col=None, redshift=None,
-                  ivar_col=None, mask_col=None, wave_grid=WAVE_GRID):
+                  ivar_col=None, mask_col=None, wave_grid=WAVE_GRID,
+                  normalizer=None):
     """ES: Carga UN espectro real desde un CSV y lo lleva a la grilla comun.
         Para el formato del equipo (Cata): columnas wavelength, flux y
         opcionalmente ivar/mask/redshift. Detecta nombres y acepta `loglam`.
@@ -403,7 +459,7 @@ def load_desi_csv(path, wave_col=None, flux_col=None, redshift=None,
         "mask": tab[mask_name].to_numpy(float) if mask_name is not None else np.zeros_like(flux),
         "redshift": float(redshift),
     }
-    return clean_desi_spectrum(rec, wave_grid=wave_grid)
+    return clean_desi_spectrum(rec, wave_grid=wave_grid, normalizer=normalizer)
 
 
 def export_sim2real(result, X_real, out_dir=".", tag="sim2real"):
@@ -534,7 +590,8 @@ def evaluate_on_labeled(result, X_real, y_true, classes=None):
 #              EN: Load LABELLED real DESI spectra (per-class folders)
 # --------------------------------------------------------------------------
 def load_labeled_desi_folder(base_dir, classes=("G", "K"), n_per_class=None,
-                             balanced=True, wave_grid=WAVE_GRID, seed=0):
+                             balanced=True, wave_grid=WAVE_GRID, seed=0,
+                             normalizer=None):
     """ES: Carga espectros DESI reales ETIQUETADOS desde carpetas por clase
         (base_dir/<clase>/*.csv, formato del equipo con columnas wavelength/flux
         y teff/logg/feh). Cada espectro pasa por `load_desi_csv` (misma
@@ -561,12 +618,13 @@ def load_labeled_desi_folder(base_dir, classes=("G", "K"), n_per_class=None,
             if n_per_class is not None and len(rows) >= n_per_class:
                 break
             try:
-                x = load_desi_csv(f, wave_grid=wave_grid)
+                x = load_desi_csv(f, wave_grid=wave_grid, normalizer=normalizer)
             except Exception:
                 x = None
             if x is not None and np.all(np.isfinite(x)):
                 rows.append(x)
         by_class[c] = rows
+    # ES: balancear a la clase mas pequena | EN: balance to the smallest class
     if balanced and by_class:
         m = min(len(v) for v in by_class.values())
         by_class = {c: v[:m] for c, v in by_class.items()}
