@@ -17,6 +17,9 @@ importa `project_lib` igual que los scripts.
 | `01_generate_train.py` | generate synthetic G/K, train RF, save figures + model | genera G/K sinteticos, entrena RF, guarda figuras + modelo | yes |
 | `02_evaluate_real_desi.py` | REAL accuracy on Cata's labelled G/K spectra | accuracy REAL sobre los espectros G/K etiquetados de Cata | no |
 | `03_broadening.py` | retrain with R(lambda) broadening, compare real accuracy before/after | reentrena con ensanchamiento R(lambda), compara accuracy real antes/despues | yes |
+| `05_normalization.py` | improved continuum normalization, real-accuracy progression chart | normalizacion de continuo mejorada, grafico de progreso de accuracy real | yes |
+| `06_generate_large.py` | scale-up: batched generation of ~100k synthetic spectra -> .npz (see SCALE_100K.md) | escalado: generacion por lotes de ~100k espectros -> .npz (ver SCALE_100K.md) | yes |
+| `07_train_large.py` | train RF from the large .npz (fixed hyperparams) + real eval | entrena RF desde el .npz grande (hiperparams fijos) + eval real | no |
 
 ## Run order / Orden de ejecucion
 
@@ -26,6 +29,7 @@ python 01_generate_train.py                                   # -> figures/ + rf
 python 02_evaluate_real_desi.py  <espectros_balanceados_desi> # -> real accuracy + confusion
 python 03_broadening.py --data <espectros_balanceados_desi> --resolution desi   # DESI
 # LAMOST:  python 03_broadening.py --data <espectros_lamost> --resolution 1800
+python 05_normalization.py --data <espectros_balanceados_desi>  # -> figures/normalization_progress.png
 ```
 
 `<espectros_balanceados_desi>` = **EN:** Cata's per-class folders (`G/`, `K/`, ...)
@@ -72,3 +76,27 @@ ES: `project_lib.py` = libreria compartida; scripts = ejecutores; notebook = dem
 
 **EN:** `04_check_broadening.py --data <folder> --class G --resolution desi` plots the mean SHARP vs BROADENED synthetic spectrum next to the mean REAL spectrum (full range + a zoom on a line). If broadening is right, the broadened synthetic matches the real line widths. Use `--resolution 1800` for LAMOST.
 **ES:** `04_check_broadening.py --data <folder> --class G --resolution desi` grafica el sintetico medio AGUDO vs ENSANCHADO junto al REAL medio (rango completo + zoom en una linea). Si el ensanchamiento es correcto, el sintetico ensanchado coincide con el ancho de las lineas reales. Usa `--resolution 1800` para LAMOST.
+
+## Step 5: improved normalization / Paso 5: normalizacion mejorada
+
+**EN:** The broadening step showed that matching the instrument resolution barely
+moved the real accuracy (0.66 -> 0.67): the remaining sim->real gap is a
+**continuum / normalization** offset, not line width. `05_normalization.py` adds a
+robust `continuum_normalize_iter` (low-order polynomial + asymmetric sigma clipping),
+applied **identically** to synthetic and real, and produces
+`figures/normalization_progress.png` comparing the real DESI accuracy across four
+stages: baseline -> +broadening -> +improved normalization -> +both. The old figures
+are untouched, so the chart shows the development progress. `project_lib.py` now
+accepts an optional `normalizer=` argument everywhere (default keeps the previous
+percentile behaviour, so earlier results are reproducible).
+
+**ES:** El paso de ensanchamiento mostro que igualar la resolucion casi no movio la
+accuracy real (0.66 -> 0.67): la brecha sim->real que queda es un offset de
+**continuo / normalizacion**, no de ancho de linea. `05_normalization.py` agrega una
+`continuum_normalize_iter` robusta (polinomio de grado bajo + recorte sigma
+asimetrico), aplicada **igual** a sinteticos y reales, y genera
+`figures/normalization_progress.png` comparando la accuracy real de DESI en cuatro
+etapas: baseline -> +ensanchamiento -> +normalizacion mejorada -> +ambas. Las figuras
+viejas no se tocan, asi el grafico muestra el progreso del desarrollo. `project_lib.py`
+ahora acepta un argumento opcional `normalizer=` en todas partes (por defecto mantiene
+el comportamiento por percentil previo, asi los resultados anteriores son reproducibles).
