@@ -44,4 +44,6 @@ shap                     # EN: 08_shap.py interpretability | ES: interpretabilid
 # ES: Espectros DESI reales (SPARCL / NOIRLab Astro Data Lab)
 sparclclient
 astropy
+astroquery               # EN: SDSS SkyServer (00_fetch_sdss.py) - independent of NOIRLab
+                         # ES: SDSS SkyServer (00_fetch_sdss.py) - independiente de NOIRLab
 astro-datalab            # EN: DESI x Gaia x MWS query for 00_fetch_desi.py | ES: q
