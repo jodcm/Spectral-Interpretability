@@ -36,8 +36,9 @@ pandas
 scipy                    # continuum_normalize (percentile_filter)
 matplotlib
 seaborn
-scikit-learn
+scikit-learn             # EN: RF + Payne MLP emulator (MLPRegressor) | ES: RF + emulador Payne MLP
 joblib                   # EN: save/load the RF model | ES: guardar/cargar el modelo RF
+shap                     # EN: 08_shap.py interpretability | ES: interpretabilidad 08_shap.py
 
 # EN: Real DESI spectra (SPARCL / NOIRLab Astro Data Lab)
 # ES: Espectros DESI reales (SPARCL / NOIRLab Astro Data Lab)

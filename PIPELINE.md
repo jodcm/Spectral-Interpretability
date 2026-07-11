@@ -20,6 +20,9 @@ importa `project_lib` igual que los scripts.
 | `05_normalization.py` | improved continuum normalization, real-accuracy progression chart | normalizacion de continuo mejorada, grafico de progreso de accuracy real | yes |
 | `06_generate_large.py` | scale-up: batched generation of ~100k synthetic spectra -> .npz (see SCALE_100K.md) | escalado: generacion por lotes de ~100k espectros -> .npz (ver SCALE_100K.md) | yes |
 | `07_train_large.py` | train RF from the large .npz (fixed hyperparams) + real eval | entrena RF desde el .npz grande (hiperparams fijos) + eval real | no |
+| `08_shap.py` | SHAP interpretability: which wavelengths/lines drive G/K | interpretabilidad SHAP: que longitudes de onda/lineas deciden G/K | no |
+| `09_payne_compare.py` | 2nd emulator: train a Payne MLP, compare real accuracy vs TransformerPayne | 2do emulador: entrena un Payne MLP, compara accuracy real vs TransformerPayne | yes |
+| `ingest_lamost.py` | convert LAMOST LRS FITS -> per-class CSVs (2nd real dataset) | convierte FITS LAMOST LRS -> CSV por clase (2do dataset real) | no |
 
 ## Run order / Orden de ejecucion
 
@@ -100,3 +103,56 @@ etapas: baseline -> +ensanchamiento -> +normalizacion mejorada -> +ambas. Las fi
 viejas no se tocan, asi el grafico muestra el progreso del desarrollo. `project_lib.py`
 ahora acepta un argumento opcional `normalizer=` en todas partes (por defecto mantiene
 el comportamiento por percentil previo, asi los resultados anteriores son reproducibles).
+
+## Step 8: SHAP interpretability / Paso 8: interpretabilidad SHAP
+
+**EN:** `08_shap.py --data-npz sim_100k.npz --model rf_large_model.joblib` runs a
+TreeExplainer on the trained RF and plots, per wavelength, how strongly each pixel
+pushes the decision toward K vs G (`figures/shap_importance.png`), overlaid on the
+chosen physical lines and compared with the RF Gini importance. It also prints the
+top wavelengths and whether they fall on a known line (H-delta, Ca I, G-band CH,
+H-gamma, H-beta). This is the project's core "interpretability" deliverable: it shows
+the classifier decides using physically meaningful lines, not noise. No TransformerPayne
+needed.
+**ES:** `08_shap.py --data-npz sim_100k.npz --model rf_large_model.joblib` corre un
+TreeExplainer sobre el RF y grafica, por longitud de onda, cuanto empuja cada pixel la
+decision hacia K vs G (`figures/shap_importance.png`), sobre las lineas fisicas y
+comparado con la importancia Gini. Ademas imprime las longitudes de onda top y si caen
+sobre una linea conocida. Es el entregable central de "interpretabilidad": muestra que
+el clasificador decide con lineas fisicas, no con ruido. No necesita TransformerPayne.
+
+## Step 9: second emulator (The Payne) / Paso 9: segundo emulador (The Payne)
+
+**EN:** The project requires TWO emulators. `payne.py` defines a Payne-style MLP
+(Ting et al. 2019: labels -> spectrum) and `09_payne_compare.py` trains it on a
+TransformerPayne library (TP plays the role of the ground-truth physics), then builds
+one RF per emulator and compares their **real DESI accuracy**
+(`figures/emulator_comparison.png`) plus a reconstruction check
+(`figures/payne_reconstruction.png`). If The Payne is a good surrogate, both emulators
+give a similar sim->real transfer.
+`python 09_payne_compare.py --data proyecto_desi/espectros_balanceados_desi`
+**ES:** El proyecto requiere DOS emuladores. `payne.py` define un MLP estilo Payne
+(Ting et al. 2019: etiquetas -> espectro) y `09_payne_compare.py` lo entrena con una
+libreria de TransformerPayne (TP hace de fisica verdadera), luego arma un RF por
+emulador y compara su **accuracy real de DESI** (`figures/emulator_comparison.png`) mas
+un chequeo de reconstruccion (`figures/payne_reconstruction.png`).
+
+## Second real dataset: LAMOST / Segundo dataset real: LAMOST
+
+**EN:** LAMOST LRS is a second, independent real dataset (many more spectra, LOWER
+resolution R~1800). Workflow, mirroring DESI but at LAMOST resolution:
+```bash
+# 1) FITS -> per-class labelled CSVs (same format as Cata's DESI folders)
+python ingest_lamost.py --in lamost_fits --out proyecto_desi/espectros_lamost
+# 2) generate 100k synthetic broadened to LAMOST resolution (1800, not 'desi')
+python 06_generate_large.py --n 50000 --out sim_100k_lamost.npz --jobs 24 --batch 16 --resolution 1800
+# 3) train + evaluate on the real LAMOST spectra
+python 07_train_large.py --data-npz sim_100k_lamost.npz --real proyecto_desi/espectros_lamost --norm iterative
+```
+The only difference vs DESI is `--resolution 1800` in generation (LAMOST has a lower,
+roughly constant R). You then have TWO independent real accuracies (DESI + LAMOST).
+Note: `ingest_lamost.py` keeps only the 4000-5000 A window; LAMOST FITS layouts vary
+between releases, so if a file is not read it prints a message — adapt `read_lamost_fits`.
+**ES:** LAMOST LRS es un segundo dataset real independiente (muchos mas espectros, MENOR
+resolucion R~1800). El unico cambio vs DESI es `--resolution 1800` en la generacion.
+Asi obtienes DOS accuracies reales independientes (DESI + LAMOST).

@@ -153,7 +153,10 @@ def main():
     ap.add_argument("--classes", nargs="+", default=["G", "K"], help="spectral classes")
     ap.add_argument("--out", default="sim_100k.npz", help="output .npz path")
     ap.add_argument("--jobs", type=int, default=1, help="CPU worker processes (e.g. 24). 1 = single process / GPU")
-    ap.add_argument("--batch", type=int, default=500, help="emulator batch size per vmap call")
+    ap.add_argument("--batch", type=int, default=32,
+                    help="emulator batch size per vmap call. LOWER this if you hit "
+                         "'Out of memory' (each spectrum on the fine grid is memory-heavy; "
+                         "peak RAM ~ jobs * batch). Try 16-32 on CPU, larger only on GPU.")
     ap.add_argument("--resolution", default="desi", help="'desi' R(lambda), a number, or 'none'")
     ap.add_argument("--norm", default="iterative", choices=["iterative", "percentile"],
                     help="continuum normalizer (must match training)")
