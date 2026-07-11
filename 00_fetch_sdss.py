@@ -63,12 +63,22 @@ def build_query(tmin, tmax, limit):
     """EN: SkyServer SQL (T-SQL dialect: TOP n, not LIMIT). Clean stellar spectra
         (SpecObj) joined with SEGUE stellar parameters (sppParams). loggadop > 3.5
         keeps dwarfs, matching the synthetic LOGG_RANGE.
+        IMPORTANT: astroquery's SDSS.get_spectra(matches=...) builds the download URL
+        from the columns run2d, plate, mjd and fiberID -- they MUST be present and
+        named exactly like that (fiberID with capital ID), otherwise you get a
+        KeyError: 'run2d'.
     ES: SQL de SkyServer (dialecto T-SQL: TOP n, no LIMIT). Espectros estelares limpios
-        (SpecObj) unidos con parametros estelares SEGUE (sppParams). loggadop > 3.5
-        deja enanas, igual que el LOGG_RANGE sintetico."""
+        (SpecObj) unidos con parametros estelares SEGUE (sppParams).
+        IMPORTANTE: SDSS.get_spectra(matches=...) de astroquery arma la URL de descarga
+        con las columnas run2d, plate, mjd y fiberID -- deben estar y llamarse
+        exactamente asi (fiberID con ID mayuscula), si no da KeyError: 'run2d'."""
     return f"""
     SELECT TOP {limit}
-        s.specobjid, s.plate, s.mjd, s.fiberid,
+        s.specobjid,
+        s.plate   AS plate,
+        s.mjd     AS mjd,
+        s.fiberid AS fiberID,
+        s.run2d   AS run2d,
         p.teffadop AS teff, p.loggadop AS logg, p.fehadop AS feh
     FROM SpecObj AS s
     JOIN sppParams AS p ON s.specobjid = p.specobjid
