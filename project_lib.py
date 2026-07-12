@@ -586,13 +586,68 @@ def evaluate_on_labeled(result, X_real, y_true, classes=None):
 
 
 # --------------------------------------------------------------------------
+# NEXT STEP 5 - ES: Correccion de velocidad radial (RV) por auto-correlacion
+#              EN: Radial-velocity (RV) self-correction by cross-correlation
+# --------------------------------------------------------------------------
+# ES: PROBLEMA: los CSV DESI del equipo NO traen columna de redshift, asi que los
+#     espectros quedan en el marco OBSERVADO. Las estrellas tienen velocidades
+#     radiales (halo/disco, sigma ~ 220 km/s), asi que sus lineas estan corridas
+#     hasta +-12 A -- y la grilla tiene 1 A/pixel. Como el RF decide mirando la
+#     PROFUNDIDAD DE BALMER EN PIXELES FIJOS (lo mostro el analisis SHAP), una linea
+#     corrida se ve mas DEBIL de lo que es -> Balmer debil = estrella fria = K.
+#     Por eso las G reales se clasifican sistematicamente como K.
+# EN: PROBLEM: the team's DESI CSVs have NO redshift column, so the spectra stay in
+#     the OBSERVED frame. Stars have radial velocities (halo/disc, sigma ~ 220 km/s),
+#     so their lines are displaced by up to +-12 A -- and the grid is 1 A/pixel. Since
+#     the RF decides from the BALMER DEPTH AT FIXED PIXELS (the SHAP analysis showed
+#     this), a displaced line looks WEAKER than it is -> weak Balmer = cool star = K.
+#     That is why real G stars are systematically classified as K.
+#
+# ES/EN: Solucion / Solution: estimar el corrimiento por correlacion cruzada contra un
+#     template sintetico y devolver el espectro al reposo. No requiere volver a bajar
+#     los datos. / Estimate the shift by cross-correlating against a synthetic template
+#     and bring the spectrum back to rest. No re-download needed.
+C_KMS = 299792.458
+
+
+def estimate_shift(x, template, wave_grid=WAVE_GRID, max_shift=15.0, step=0.25):
+    """ES: Estima el corrimiento (en Angstrom) que hay que aplicar a `x` para que sus
+        lineas coincidan con `template`, por correlacion cruzada normalizada.
+    EN: Estimate the shift (in Angstrom) to apply to `x` so its lines line up with
+        `template`, via normalized cross-correlation.
+    -> shift in A (positive = the observed lines sit REDWARD of rest).
+    """
+    x = np.asarray(x, dtype=float)
+    template = np.asarray(template, dtype=float)
+    a = template - np.nanmean(template)
+    na = np.linalg.norm(a) + 1e-12
+    best_s, best_c = 0.0, -np.inf
+    for s in np.arange(-max_shift, max_shift + step, step):
+        xs = np.interp(wave_grid + s, wave_grid, x)
+        b = xs - np.nanmean(xs)
+        c = float(np.dot(a, b) / (na * (np.linalg.norm(b) + 1e-12)))
+        if c > best_c:
+            best_c, best_s = c, float(s)
+    return best_s
+
+
+def rv_correct(x, template, wave_grid=WAVE_GRID, max_shift=15.0, step=0.25):
+    """ES: Devuelve (espectro_corregido, corrimiento_A, rv_kms).
+    EN: Returns (corrected_spectrum, shift_A, rv_kms)."""
+    s = estimate_shift(x, template, wave_grid=wave_grid, max_shift=max_shift, step=step)
+    corrected = np.interp(wave_grid + s, wave_grid, np.asarray(x, dtype=float))
+    rv = s / float(np.mean(wave_grid)) * C_KMS
+    return corrected, s, rv
+
+
+# --------------------------------------------------------------------------
 # NEXT STEP 3 - ES: Cargar espectros DESI reales ETIQUETADOS (carpetas por clase)
 #              EN: Load LABELLED real DESI spectra (per-class folders)
 # --------------------------------------------------------------------------
 def load_labeled_desi_folder(base_dir, classes=("G", "K"), n_per_class=None,
                              balanced=True, wave_grid=WAVE_GRID, seed=0,
                              normalizer=None, min_logg=None, max_logg=None,
-                             teff_range=None):
+                             teff_range=None, rv_template=None, max_shift=15.0):
     """ES: Carga espectros DESI reales ETIQUETADOS desde carpetas por clase
         (base_dir/<clase>/*.csv, formato del equipo con columnas wavelength/flux
         y teff/logg/feh). Cada espectro pasa por `load_desi_csv` (misma
@@ -654,6 +709,7 @@ def load_labeled_desi_folder(base_dir, classes=("G", "K"), n_per_class=None,
         return True
 
     by_class = {}
+    shifts = []
     for c in classes:
         files = sorted(glob.glob(os.path.join(base_dir, str(c), "*.csv")))
         rng.shuffle(files)
@@ -667,8 +723,14 @@ def load_labeled_desi_folder(base_dir, classes=("G", "K"), n_per_class=None,
                 x = load_desi_csv(f, wave_grid=wave_grid, normalizer=normalizer)
             except Exception:
                 x = None
-            if x is not None and np.all(np.isfinite(x)):
-                rows.append(x)
+            if x is None or not np.all(np.isfinite(x)):
+                continue
+            # NEXT STEP 5 - ES: corregir la velocidad radial | EN: correct the radial velocity
+            if rv_template is not None:
+                x, s, _rv = rv_correct(x, rv_template, wave_grid=wave_grid,
+                                       max_shift=max_shift)
+                shifts.append(s)
+            rows.append(x)
         by_class[c] = rows
     # ES: balancear a la clase mas pequena | EN: balance to the smallest class
     if balanced and by_class:
@@ -680,4 +742,10 @@ def load_labeled_desi_folder(base_dir, classes=("G", "K"), n_per_class=None,
             X_rows.append(x)
             y.append(c)
     X = np.vstack(X_rows) if X_rows else np.empty((0, len(wave_grid)))
-    return X, np.array(y), {c: len(by_class.get(c, [])) for c in classes}
+    counts = {c: len(by_class.get(c, [])) for c in classes}
+    if rv_template is not None and shifts:
+        s = np.asarray(shifts)
+        counts["_rv_shift_median_A"] = float(np.median(s))
+        counts["_rv_shift_std_A"] = float(np.std(s))
+        counts["_rv_std_kms"] = float(np.std(s) / float(np.mean(wave_grid)) * C_KMS)
+    return X, np.array(y), counts

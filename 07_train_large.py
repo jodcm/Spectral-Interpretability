@@ -54,6 +54,19 @@ def main():
     ap.add_argument("--teff-range", type=float, nargs=2, default=None, dest="teff_range",
                     metavar=("TMIN", "TMAX"),
                     help="keep only real stars with TMIN <= Teff <= TMAX")
+    # EN: The team's DESI CSVs have NO redshift column -> the spectra are in the
+    #     OBSERVED frame and their lines are displaced by the star's radial velocity
+    #     (sigma ~ 220 km/s = up to +-12 A). Since the RF reads the Balmer depth at
+    #     FIXED pixels, a displaced line looks weaker -> G gets misread as K.
+    #     --rv-correct estimates the shift per spectrum by cross-correlation against
+    #     the mean synthetic spectrum and brings it back to rest.
+    # ES: Los CSV DESI del equipo NO traen redshift -> espectros en el marco OBSERVADO,
+    #     lineas corridas por la velocidad radial. --rv-correct estima el corrimiento
+    #     por correlacion cruzada contra el sintetico medio y lo devuelve al reposo.
+    ap.add_argument("--rv-correct", action="store_true", dest="rv_correct",
+                    help="correct each real spectrum for its radial velocity (cross-correlation)")
+    ap.add_argument("--max-shift", type=float, default=15.0, dest="max_shift",
+                    help="max |shift| searched, in Angstrom")
     ap.add_argument("--tag", default=None,
                     help="label for the output files (default: derived from --real)")
     ap.add_argument("--n-estimators", type=int, default=200, dest="n_estimators")
@@ -110,10 +123,20 @@ def main():
     # EN: 3) REAL DESI accuracy with the MATCHING normalizer
     # ES: 3) accuracy REAL de DESI con el normalizador CONCORDANTE
     if os.path.isdir(args.real):
+        # EN: RV template = mean synthetic spectrum (same normalization/resolution)
+        # ES: template RV = espectro sintetico medio (misma normalizacion/resolucion)
+        rv_template = X.mean(axis=0).astype(float) if args.rv_correct else None
+        if rv_template is not None:
+            tag += "_rv"
         X_real, y_real, counts = P.load_labeled_desi_folder(
             args.real, classes=tuple(classes), n_per_class=args.real_n,
             balanced=True, seed=0, normalizer=normalizer,
-            min_logg=args.min_logg, max_logg=args.max_logg, teff_range=args.teff_range)
+            min_logg=args.min_logg, max_logg=args.max_logg, teff_range=args.teff_range,
+            rv_template=rv_template, max_shift=args.max_shift)
+        if args.rv_correct and "_rv_std_kms" in counts:
+            print("RV correction: measured shift median=%.2f A, std=%.2f A (RV std ~ %.0f km/s)"
+                  % (counts.pop("_rv_shift_median_A"), counts.pop("_rv_shift_std_A"),
+                     counts.pop("_rv_std_kms")))
         cuts = []
         if args.min_logg is not None:
             cuts.append(f"logg >= {args.min_logg:g} (giants removed)")
