@@ -2,3 +2,7 @@
 *.joblib
 __pycache__/
 *.pyc
+
+# Downloaded real spectra (reproducible with 00_fetch_sdss.py) / espectros reales descargados
+proyecto_desi/espectros_sdss/
+proyecto_desi/espectros_lamost/
