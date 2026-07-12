@@ -44,6 +44,18 @@ def main():
     ap.add_argument("--norm", default="iterative", choices=["iterative", "percentile"],
                     help="MUST match the normalizer used to generate the .npz")
     ap.add_argument("--real-n", type=int, default=150, dest="real_n", help="real spectra per class")
+    # EN: restrict the REAL sample to the emulator's training domain (dwarfs only!).
+    #     The DESI sample contains ~17% giants (logg<3.5) that the synthetic grid never
+    #     covered -> use --min-logg 3.5 (or 4.0) to test the selection-mismatch hypothesis.
+    # ES: restringe la muestra REAL al dominio de entrenamiento (solo enanas!).
+    ap.add_argument("--min-logg", type=float, default=None, dest="min_logg",
+                    help="drop real stars below this log g (e.g. 3.5 removes giants)")
+    ap.add_argument("--max-logg", type=float, default=None, dest="max_logg")
+    ap.add_argument("--teff-range", type=float, nargs=2, default=None, dest="teff_range",
+                    metavar=("TMIN", "TMAX"),
+                    help="keep only real stars with TMIN <= Teff <= TMAX")
+    ap.add_argument("--tag", default=None,
+                    help="label for the output files (default: derived from --real)")
     ap.add_argument("--n-estimators", type=int, default=200, dest="n_estimators")
     ap.add_argument("--max-depth", default="none", dest="max_depth", help="int or 'none'")
     ap.add_argument("--min-samples-leaf", type=int, default=2, dest="min_samples_leaf")
@@ -59,6 +71,11 @@ def main():
     os.makedirs("figures", exist_ok=True)
     normalizer = P.continuum_normalize_iter if args.norm == "iterative" else P.continuum_normalize
     max_depth = None if str(args.max_depth).lower() == "none" else int(args.max_depth)
+    # EN: tag = short name of the real survey, so runs do not overwrite each other
+    # ES: tag = nombre corto del survey real, para que las corridas no se pisen
+    tag = args.tag or os.path.basename(os.path.normpath(args.real)).replace("espectros_", "")
+    if args.min_logg is not None:
+        tag += f"_logg{args.min_logg:g}+"
 
     # EN: 1) load the large synthetic set | ES: 1) cargar el set sintetico grande
     d = np.load(args.data_npz, allow_pickle=True)
@@ -84,31 +101,46 @@ def main():
     sim_acc = accuracy_score(yte, rf.predict(Xte))
     print("simulated test accuracy:", round(sim_acc, 3))
 
+    out_model = args.out_model if args.out_model != "rf_large_model.joblib" \
+        else f"rf_large_{tag}.joblib"
     joblib.dump({"model": rf, "classes": classes, "wave_grid": P.WAVE_GRID,
-                 "norm": args.norm}, args.out_model)
-    print("saved", args.out_model)
+                 "norm": args.norm}, out_model)
+    print("saved", out_model)
 
     # EN: 3) REAL DESI accuracy with the MATCHING normalizer
     # ES: 3) accuracy REAL de DESI con el normalizador CONCORDANTE
     if os.path.isdir(args.real):
         X_real, y_real, counts = P.load_labeled_desi_folder(
             args.real, classes=tuple(classes), n_per_class=args.real_n,
-            balanced=True, seed=0, normalizer=normalizer)
+            balanced=True, seed=0, normalizer=normalizer,
+            min_logg=args.min_logg, max_logg=args.max_logg, teff_range=args.teff_range)
+        cuts = []
+        if args.min_logg is not None:
+            cuts.append(f"logg >= {args.min_logg:g} (giants removed)")
+        if args.max_logg is not None:
+            cuts.append(f"logg <= {args.max_logg:g}")
+        if args.teff_range is not None:
+            cuts.append(f"Teff in [{args.teff_range[0]:.0f}, {args.teff_range[1]:.0f}] K")
+        if cuts:
+            print("real-sample cuts:", "; ".join(cuts))
         print("real labelled spectra per class:", counts, "-> N =", len(y_real))
+        if len(y_real) == 0:
+            raise SystemExit("[ERROR] no real spectra left after the cuts.")
         ev = P.evaluate_on_labeled({"model": rf, "classes": classes}, X_real, y_real,
                                    classes=classes)
-        print("\n=== REAL DESI accuracy (100k-trained RF): %.3f ===" % ev["accuracy"])
+        print("\n=== REAL accuracy [%s] (RF trained on %d synthetic): %.3f ==="
+              % (tag, X.shape[0], ev["accuracy"]))
         print(ev["report"])
 
         cm = ev["confusion_matrix"]
         fig, ax = plt.subplots(figsize=(5, 4))
         sns.heatmap(cm, annot=True, fmt="d", cmap="Greens",
                     xticklabels=classes, yticklabels=classes, ax=ax)
-        ax.set_xlabel("Predicted"); ax.set_ylabel("True (real DESI label)")
-        ax.set_title("Real DESI %s (100k-trained RF) - acc=%.3f, N=%d"
-                     % ("/".join(classes), ev["accuracy"], len(y_real)))
+        ax.set_xlabel("Predicted"); ax.set_ylabel("True (real label)")
+        ax.set_title("Real %s %s - acc=%.3f, N=%d"
+                     % (tag, "/".join(classes), ev["accuracy"], len(y_real)))
         plt.tight_layout()
-        out = "figures/desi_real_confusion_100k.png"
+        out = f"figures/real_confusion_{tag}.png"
         plt.savefig(out, dpi=130, bbox_inches="tight"); plt.close()
         print("saved", out)
     else:

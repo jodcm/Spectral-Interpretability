@@ -591,7 +591,8 @@ def evaluate_on_labeled(result, X_real, y_true, classes=None):
 # --------------------------------------------------------------------------
 def load_labeled_desi_folder(base_dir, classes=("G", "K"), n_per_class=None,
                              balanced=True, wave_grid=WAVE_GRID, seed=0,
-                             normalizer=None):
+                             normalizer=None, min_logg=None, max_logg=None,
+                             teff_range=None):
     """ES: Carga espectros DESI reales ETIQUETADOS desde carpetas por clase
         (base_dir/<clase>/*.csv, formato del equipo con columnas wavelength/flux
         y teff/logg/feh). Cada espectro pasa por `load_desi_csv` (misma
@@ -604,11 +605,54 @@ def load_labeled_desi_folder(base_dir, classes=("G", "K"), n_per_class=None,
         accuracy on DESI.
 
     ES/EN: -> (X_real, y_true, per_class_counts).
+
+    NEXT STEP 4 - EN: `min_logg` / `max_logg` / `teff_range` restrict the REAL sample to
+        the region the emulator was actually trained on. This matters: the synthetic
+        grid is DWARFS ONLY (LOGG_RANGE = 4.0-5.0), but the real DESI sample contains
+        ~17% GIANTS (logg < 3.5) and K stars below the synthetic 4000 K floor. Those
+        stars are out-of-distribution -> guaranteed errors. Filtering them out tests
+        whether the "domain shift" is really a physics limit or just a SELECTION
+        mismatch. (SDSS, which naturally contains no giants, already reaches ~0.95.)
+    ES: `min_logg` / `max_logg` / `teff_range` restringen la muestra REAL a la region en
+        la que el emulador fue realmente entrenado. Importa: la grilla sintetica es SOLO
+        ENANAS (LOGG_RANGE = 4.0-5.0), pero la muestra DESI real trae ~17% de GIGANTES
+        (logg < 3.5) y estrellas K por debajo del piso sintetico de 4000 K. Esas
+        estrellas estan fuera de distribucion -> errores garantizados. Filtrarlas prueba
+        si el "domain shift" es un limite fisico o solo un desajuste de SELECCION.
     """
     import os
     import glob
     import random
     rng = random.Random(seed)
+
+    def passes_filter(path):
+        """EN: read teff/logg from the CSV header row and apply the cuts.
+        ES: lee teff/logg de la primera fila del CSV y aplica los cortes."""
+        if min_logg is None and max_logg is None and teff_range is None:
+            return True
+        try:
+            head = pd.read_csv(path, nrows=1)
+        except Exception:
+            return False
+        low = {k.lower(): k for k in head.columns}
+        if min_logg is not None or max_logg is not None:
+            if "logg" not in low:
+                return False
+            g = float(head[low["logg"]].iloc[0])
+            if not np.isfinite(g):
+                return False
+            if min_logg is not None and g < min_logg:
+                return False
+            if max_logg is not None and g > max_logg:
+                return False
+        if teff_range is not None:
+            if "teff" not in low:
+                return False
+            t = float(head[low["teff"]].iloc[0])
+            if not np.isfinite(t) or t < teff_range[0] or t > teff_range[1]:
+                return False
+        return True
+
     by_class = {}
     for c in classes:
         files = sorted(glob.glob(os.path.join(base_dir, str(c), "*.csv")))
@@ -617,6 +661,8 @@ def load_labeled_desi_folder(base_dir, classes=("G", "K"), n_per_class=None,
         for f in files:
             if n_per_class is not None and len(rows) >= n_per_class:
                 break
+            if not passes_filter(f):
+                continue
             try:
                 x = load_desi_csv(f, wave_grid=wave_grid, normalizer=normalizer)
             except Exception:
