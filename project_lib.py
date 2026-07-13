@@ -81,7 +81,52 @@ VARIED_ELEMENTS = ["Fe", "Na", "Mg", "C", "Ca", "K", "S", "N", "Mn", "Ti"]
 # ES: Normalizacion de continuo (igual para sim y real)
 # EN: Continuum normalization (identical for sim and real)
 # --------------------------------------------------------------------------
-def continuum_normalize(flux, window=151, percentile=88):
+# --------------------------------------------------------------------------
+# NEXT STEP 6 - ES: Mascara de lineas para el ajuste del continuo
+#              EN: Line mask for the continuum fit
+# --------------------------------------------------------------------------
+# ES: PROBLEMA MEDIDO (13_spectra_compare.py): la H-beta de DESI resulta 20% MAS PLANA
+#     que la de SDSS a igual Teff, mientras TODAS las demas lineas coinciden (0.97-1.10).
+#     Y SHAP mostro que el RF depende casi solo de H-beta -> esa unica linea distorsionada
+#     produce todo el sesgo G->K (quitarla sube el recall de G de 0.67 a 0.81).
+#     CAUSA: las lineas de Balmer tienen alas MUY anchas (+-30-50 A). El polinomio del
+#     continuo las absorbe parcialmente, y cuanto lo hace depende del ruido y de la forma
+#     del espectro -> distinto en DESI y en SDSS. Las lineas metalicas, estrechas, no
+#     sufren esto (por eso coinciden).
+#     SOLUCION (estandar en espectroscopia): EXCLUIR las lineas fuertes del ajuste del
+#     continuo. El continuo se ajusta solo donde no hay lineas y se interpola por encima.
+# EN: MEASURED PROBLEM (13_spectra_compare.py): DESI's H-beta comes out 20% SHALLOWER than
+#     SDSS's at the same Teff, while EVERY other line agrees (0.97-1.10). And SHAP showed
+#     the RF leans almost entirely on H-beta -> that one distorted line drives the whole
+#     G->K bias (removing it lifts G recall from 0.67 to 0.81).
+#     CAUSE: Balmer lines have VERY broad wings (+-30-50 A). The continuum polynomial
+#     partially absorbs them, and how much depends on the noise and the spectral shape ->
+#     different for DESI and SDSS. Narrow metal lines do not suffer from this (hence they
+#     agree).
+#     FIX (standard in spectroscopy): EXCLUDE the strong lines from the continuum fit. The
+#     continuum is fitted only where there are no lines and interpolated across them.
+#
+# ES/EN: (center_A, half_width_A) -- Balmer wide, metals narrow
+CONTINUUM_MASK = [
+    (4102.9, 45.0),   # H-delta  (broad wings / alas anchas)
+    (4341.7, 45.0),   # H-gamma
+    (4862.7, 50.0),   # H-beta   <-- the one that breaks the DESI transfer
+    (4226.7, 8.0),    # Ca I     (narrow / estrecha)
+    (4305.0, 15.0),   # G-band CH (molecular band / banda molecular)
+]
+
+
+def continuum_line_mask(wave, extra=None):
+    """ES: True donde NO hay linea fuerte -> puntos usables para ajustar el continuo.
+    EN: True where there is NO strong line -> points usable to fit the continuum."""
+    wave = np.asarray(wave, dtype=float)
+    ok = np.ones_like(wave, dtype=bool)
+    for lam, half in (CONTINUUM_MASK if extra is None else list(CONTINUUM_MASK) + list(extra)):
+        ok &= np.abs(wave - lam) > half
+    return ok
+
+
+def continuum_normalize(flux, wave=None, window=151, percentile=88):
     """ES: Normaliza dividiendo por una estimacion del continuo (envolvente
         superior con filtro de percentil alto), robusta a lineas y ruido. Se
         aplica IGUAL a sim y real para que el RF transfiera de sim a DESI.
@@ -96,7 +141,80 @@ def continuum_normalize(flux, window=151, percentile=88):
     return flux / continuum
 
 
-def continuum_normalize_iter(flux, deg=4, niter=5, low_sigma=1.5, high_sigma=3.0):
+def get_normalizer(name):
+    """ES/EN: name -> normalizer function. Used by all the CLI scripts (--norm).
+        'percentile' = original (high-percentile filter)
+        'iterative'  = polynomial + asymmetric sigma clipping  (fixed the sim->real gap)
+        'masked'     = iterative + LINE MASK  (fixes the H-beta / DESI problem)
+    """
+    return {
+        "percentile": continuum_normalize,
+        "iterative": continuum_normalize_iter,
+        "masked": continuum_normalize_masked,
+    }[str(name).lower()]
+
+
+def continuum_normalize_masked(flux, wave=None, deg=4, niter=5, low_sigma=1.0,
+                               high_sigma=3.0, smooth=0.0):
+    """ES: Normalizacion de continuo con MASCARA DE LINEAS (el fix de H-beta).
+        Ajusta el polinomio del continuo SOLO en los puntos sin lineas fuertes
+        (CONTINUUM_MASK), asi las alas anchas de Balmer ya no son absorbidas por el
+        continuo. Ademas ajusta sobre una version suavizada, para que el ruido no
+        levante la envolvente. Es la misma operacion para sim y real -> el ancho de
+        H-beta pasa a ser comparable entre DESI y SDSS.
+    EN: Continuum normalization with a LINE MASK (the H-beta fix). Fits the continuum
+        polynomial ONLY on the line-free points (CONTINUUM_MASK), so the broad Balmer
+        wings are no longer absorbed into the continuum. It also fits a smoothed version
+        so noise cannot lift the envelope. Identical for sim and real -> the H-beta depth
+        becomes comparable between DESI and SDSS.
+
+    ES/EN: `wave` = longitudes de onda de `flux` / wavelengths of `flux`. If None, assume
+        a linear grid spanning WMIN..WMAX.
+
+    ES/EN: Parametros calibrados sobre los espectros DESI reales / parameters calibrated on
+        the real DESI spectra: sin suavizado (suavizar BAJA los puntos sin lineas y hunde el
+        continuo) y low_sigma=1.0 (empuja el ajuste hacia la envolvente superior). Con esto
+        la profundidad de H-beta en DESI pasa de 0.304 a 0.364 (SDSS: 0.374).
+        No smoothing (smoothing LOWERS the line-free points and sinks the continuum) and
+        low_sigma=1.0 (pushes the fit toward the upper envelope). This takes DESI's H-beta
+        depth from 0.304 to 0.364 (SDSS: 0.374).
+    """
+    from scipy.ndimage import gaussian_filter1d
+    flux = np.asarray(flux, dtype=float)
+    n = len(flux)
+    wave = np.linspace(WMIN, WMAX, n) if wave is None else np.asarray(wave, dtype=float)
+
+    fit_on = gaussian_filter1d(flux, smooth) if smooth and smooth > 0 else flux
+
+    x = np.linspace(-1.0, 1.0, n)
+    line_free = continuum_line_mask(wave)
+    mask = np.isfinite(fit_on) & line_free
+    if mask.sum() <= deg + 1:                      # ES/EN: fallback
+        mask = np.isfinite(fit_on)
+    if mask.sum() <= deg + 1:
+        m = np.isfinite(flux)
+        return flux / np.nanmedian(flux[m]) if m.any() else flux
+
+    for _ in range(niter):
+        coef = np.polyfit(x[mask], fit_on[mask], deg)
+        cont = np.polyval(coef, x)
+        resid = fit_on - cont
+        std = np.std(resid[mask])
+        if std == 0:
+            break
+        new_mask = (np.isfinite(fit_on) & line_free
+                    & (resid > -low_sigma * std) & (resid < high_sigma * std))
+        if new_mask.sum() <= deg + 1 or new_mask.sum() == mask.sum():
+            break
+        mask = new_mask
+
+    coef = np.polyfit(x[mask], fit_on[mask], deg)
+    cont = np.polyval(coef, x)                     # ES/EN: interpolated across the lines
+    cont[cont == 0] = np.nan
+    return flux / cont
+
+
+def continuum_normalize_iter(flux, wave=None, deg=4, niter=5, low_sigma=1.5, high_sigma=3.0):
     """ES: Normalizacion de continuo MEJORADA (siguiente paso del domain shift).
         Ajusta un polinomio de grado bajo al continuo con recorte sigma ASIMETRICO:
         en cada iteracion descarta los puntos muy por DEBAJO del ajuste (lineas de
@@ -303,7 +421,10 @@ def generate_simulated(emulator, spectral_type, n=80, sigma_noise=0.02,
             intensity = gaussian_lsf_broaden(gen_wave, intensity, broaden_fwhm_A)
             intensity = np.interp(wave_grid, gen_wave, intensity)
         # ES: normalizar y luego anadir ruido | EN: normalize then add noise
-        norm = norm_fn(intensity)
+        # NEXT STEP 6 - ES/EN: pass the wavelengths so a masked normalizer finds the lines.
+        # After broadening `intensity` was resampled to wave_grid; without broadening
+        # gen_wave IS wave_grid -- so in both cases it lives on wave_grid.
+        norm = norm_fn(intensity, wave_grid)
         norm = norm + nprng.normal(0.0, sigma_noise, size=norm.shape)
         rows.append({
             "spectral_type": spectral_type,
@@ -393,7 +514,8 @@ def clean_desi_spectrum(rec, wave_grid=WAVE_GRID, normalizer=None):
         return None
     flux_interp = np.interp(wave, wave[good], flux[good])
     norm_fn = normalizer or continuum_normalize
-    norm = norm_fn(flux_interp)
+    # NEXT STEP 6 - ES/EN: pass the wavelengths so a masked normalizer can find the lines
+    norm = norm_fn(flux_interp, wave)
     return np.interp(wave_grid, wave, norm)
 
 

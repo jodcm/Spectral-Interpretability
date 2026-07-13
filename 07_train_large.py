@@ -41,8 +41,9 @@ def main():
     ap.add_argument("--data-npz", required=True, dest="data_npz", help="output of 06_generate_large.py")
     ap.add_argument("--real", default="proyecto_desi/espectros_balanceados_desi",
                     help="folder with per-class labelled real DESI spectra")
-    ap.add_argument("--norm", default="iterative", choices=["iterative", "percentile"],
-                    help="MUST match the normalizer used to generate the .npz")
+    ap.add_argument("--norm", default="masked", choices=["masked", "iterative", "percentile"],
+                    help="MUST match the normalizer used to generate the .npz. "
+                         "'masked' = line-masked continuum fit (the H-beta fix)")
     ap.add_argument("--real-n", type=int, default=150, dest="real_n", help="real spectra per class")
     # EN: restrict the REAL sample to the emulator's training domain (dwarfs only!).
     #     The DESI sample contains ~17% giants (logg<3.5) that the synthetic grid never
@@ -98,7 +99,7 @@ def main():
     import joblib
 
     os.makedirs("figures", exist_ok=True)
-    normalizer = P.continuum_normalize_iter if args.norm == "iterative" else P.continuum_normalize
+    normalizer = P.get_normalizer(args.norm)
     max_depth = None if str(args.max_depth).lower() == "none" else int(args.max_depth)
     # EN: tag = short name of the real survey, so runs do not overwrite each other
     # ES: tag = nombre corto del survey real, para que las corridas no se pisen

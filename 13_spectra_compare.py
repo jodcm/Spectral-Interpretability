@@ -87,12 +87,12 @@ def main():
     ap.add_argument("--class", dest="cls", default="G", help="spectral class")
     ap.add_argument("--teff", type=float, nargs=2, default=[5500, 5900],
                     metavar=("TMIN", "TMAX"), help="Teff window (same stars in both)")
-    ap.add_argument("--norm", default="iterative", choices=["iterative", "percentile"])
+    ap.add_argument("--norm", default="masked", choices=["masked", "iterative", "percentile"])
     ap.add_argument("--nmax", type=int, default=250)
     args = ap.parse_args()
 
     os.makedirs("figures", exist_ok=True)
-    normalizer = P.continuum_normalize_iter if args.norm == "iterative" else P.continuum_normalize
+    normalizer = P.get_normalizer(args.norm)
     na = os.path.basename(os.path.normpath(args.a)).replace("espectros_", "")
     nb = os.path.basename(os.path.normpath(args.b)).replace("espectros_", "")
 
