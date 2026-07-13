@@ -67,6 +67,22 @@ def main():
                     help="correct each real spectrum for its radial velocity (cross-correlation)")
     ap.add_argument("--max-shift", type=float, default=15.0, dest="max_shift",
                     help="max |shift| searched, in Angstrom")
+    # EN: Wavelength selection. 13_spectra_compare.py showed that DESI's H-beta is 20%
+    #     SHALLOWER than SDSS's at the same Teff, while every other line agrees. Since
+    #     SHAP showed the RF leans almost entirely on H-beta, that single broken line can
+    #     explain the whole G->K bias. --exclude masks a wavelength range so we can test
+    #     the classifier WITHOUT it. --wave-min/--wave-max restrict the range instead.
+    # ES: Seleccion de longitudes de onda. 13_spectra_compare.py mostro que la H-beta de
+    #     DESI es 20% MAS PLANA que la de SDSS al mismo Teff, mientras el resto coincide.
+    #     Como SHAP mostro que el RF depende casi solo de H-beta, esa unica linea rota
+    #     puede explicar todo el sesgo G->K. --exclude enmascara un rango para probarlo.
+    ap.add_argument("--wave-min", type=float, default=None, dest="wave_min",
+                    help="use only wavelengths >= this (A)")
+    ap.add_argument("--wave-max", type=float, default=None, dest="wave_max",
+                    help="use only wavelengths <= this (A)")
+    ap.add_argument("--exclude", type=float, nargs=2, default=None,
+                    metavar=("LMIN", "LMAX"),
+                    help="EXCLUDE this wavelength range, e.g. --exclude 4830 4900 (H-beta)")
     ap.add_argument("--tag", default=None,
                     help="label for the output files (default: derived from --real)")
     ap.add_argument("--n-estimators", type=int, default=200, dest="n_estimators")
@@ -100,6 +116,23 @@ def main():
     print(f"loaded {args.data_npz}: X={X.shape} classes={classes} "
           f"counts={ {c:int((y_txt==c).sum()) for c in classes} }")
 
+    # EN: wavelength mask -- applied IDENTICALLY to the synthetic and the real features.
+    # ES: mascara de longitud de onda -- aplicada IGUAL a los features sinteticos y reales.
+    wmask = np.ones(len(P.WAVE_GRID), dtype=bool)
+    if args.wave_min is not None:
+        wmask &= P.WAVE_GRID >= args.wave_min
+        tag += f"_wmin{args.wave_min:.0f}"
+    if args.wave_max is not None:
+        wmask &= P.WAVE_GRID <= args.wave_max
+        tag += f"_wmax{args.wave_max:.0f}"
+    if args.exclude is not None:
+        wmask &= ~((P.WAVE_GRID >= args.exclude[0]) & (P.WAVE_GRID <= args.exclude[1]))
+        tag += f"_excl{args.exclude[0]:.0f}-{args.exclude[1]:.0f}"
+    if not wmask.all():
+        print("wavelength mask: keeping %d/%d pixels (%.0f-%.0f A)"
+              % (wmask.sum(), len(wmask), P.WAVE_GRID[wmask].min(), P.WAVE_GRID[wmask].max()))
+        X = X[:, wmask]
+
     # EN: 2) train RF with FIXED hyperparameters (fast at 100k)
     # ES: 2) entrenar RF con hiperparametros FIJOS (rapido a 100k)
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=args.test_size,
@@ -116,23 +149,28 @@ def main():
 
     out_model = args.out_model if args.out_model != "rf_large_model.joblib" \
         else f"rf_large_{tag}.joblib"
-    joblib.dump({"model": rf, "classes": classes, "wave_grid": P.WAVE_GRID,
+    joblib.dump({"model": rf, "classes": classes, "wave_grid": P.WAVE_GRID[wmask],
                  "norm": args.norm}, out_model)
     print("saved", out_model)
 
     # EN: 3) REAL DESI accuracy with the MATCHING normalizer
     # ES: 3) accuracy REAL de DESI con el normalizador CONCORDANTE
     if os.path.isdir(args.real):
-        # EN: RV template = mean synthetic spectrum (same normalization/resolution)
-        # ES: template RV = espectro sintetico medio (misma normalizacion/resolucion)
-        rv_template = X.mean(axis=0).astype(float) if args.rv_correct else None
-        if rv_template is not None:
+        # EN: RV template = mean synthetic spectrum on the FULL grid (mask comes later)
+        # ES: template RV = sintetico medio en la grilla COMPLETA (la mascara va despues)
+        rv_template = None
+        if args.rv_correct:
+            Xfull = np.asarray(d["X"], dtype=np.float32)
+            rv_template = Xfull.mean(axis=0).astype(float)
             tag += "_rv"
         X_real, y_real, counts = P.load_labeled_desi_folder(
             args.real, classes=tuple(classes), n_per_class=args.real_n,
             balanced=True, seed=0, normalizer=normalizer,
             min_logg=args.min_logg, max_logg=args.max_logg, teff_range=args.teff_range,
             rv_template=rv_template, max_shift=args.max_shift)
+        # EN: same wavelength mask as the training features | ES: misma mascara
+        if not wmask.all() and X_real.shape[1] == len(wmask):
+            X_real = X_real[:, wmask]
         if args.rv_correct and "_rv_std_kms" in counts:
             print("RV correction: measured shift median=%.2f A, std=%.2f A (RV std ~ %.0f km/s)"
                   % (counts.pop("_rv_shift_median_A"), counts.pop("_rv_shift_std_A"),
