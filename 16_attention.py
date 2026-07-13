@@ -77,17 +77,46 @@ import project_lib as P
 #     al emulador. "expected: none" = sin lineas fuertes en esta ventana.
 # --------------------------------------------------------------------------
 REFERENCE_LINES = {
-    "Fe": [4045.8, 4063.6, 4071.7, 4383.5, 4404.8, 4415.1, 4461.7, 4482.2, 4919.0, 4957.6],
-    "Ca": [4226.7, 4425.4, 4435.7, 4454.8],
-    "C":  [4300.0, 4305.0, 4313.0],          # CH G-band / banda CH
-    "Mg": [4571.1, 4702.9],
-    "Ti": [4533.2, 4534.8, 4981.7, 4991.1],
-    "Mn": [4041.4, 4823.5, 4030.8],
-    "Na": [],                                 # EN/ES: Na D is at 5890 A -> OUTSIDE
-    "S":  [],                                 # EN/ES: no strong optical S lines here
-    "N":  [],                                 # EN/ES: no atomic N lines in cool-star optical
-    "K":  [],                                 # EN/ES: K I resonance at 7665 A -> OUTSIDE
+    # EN: strong, well-known lines of each element in 4000-5000 A (NIST / standard lists)
+    # ES: lineas fuertes y conocidas de cada elemento en 4000-5000 A
+    "Fe": [4045.81, 4063.59, 4071.74, 4132.06, 4143.87, 4202.03, 4260.47, 4271.15,
+           4271.76, 4325.76, 4383.55, 4404.75, 4415.12, 4494.56, 4528.61, 4871.32,
+           4890.75, 4918.99, 4920.50, 4957.60],
+    "Ca": [4226.73, 4283.01, 4289.37, 4302.53, 4318.65, 4355.08, 4425.44, 4435.68,
+           4454.78, 4455.89],
+    "C":  [4290.0, 4300.0, 4305.0, 4310.0, 4315.0],      # CH G-band (molecular)
+    "Mg": [4167.27, 4351.91, 4571.10, 4702.99],
+    "Ti": [4443.80, 4468.49, 4501.27, 4533.24, 4534.78, 4548.76, 4681.91, 4981.73,
+           4991.07, 4999.50],
+    "Mn": [4030.75, 4033.06, 4034.48, 4041.36, 4055.54, 4451.58, 4754.04, 4783.42,
+           4823.52],
+    # EN: these four have NO strong lines in this window -- their strong lines lie OUTSIDE
+    #     (Na D 5890 A, K I 7665 A). This is the falsifiable half of the test.
+    # ES: estos cuatro NO tienen lineas fuertes aca -- las suyas caen FUERA.
+    "Na": [],
+    "S":  [],
+    "N":  [],
+    "K":  [],
 }
+
+
+def enrichment(S_row, wave, lines, half=2.0):
+    """EN: the honest test. Is this element's sensitivity systematically HIGHER at its own
+        lines than everywhere else?  enrichment = <S at its lines> / <S everywhere>.
+        A single-peak match is worthless here: Fe has hundreds of lines, so which single
+        pixel happens to be the global maximum is luck. The enrichment ratio is not.
+    ES: la prueba honesta. Es la sensibilidad de este elemento sistematicamente MAS ALTA
+        sobre sus propias lineas que en el resto?  enrichment = <S en sus lineas> / <S total>.
+    -> ratio (1.0 = no preference, >1 = the element does control its own lines)
+    """
+    if not lines:
+        return np.nan
+    m = np.zeros_like(wave, dtype=bool)
+    for lam in lines:
+        m |= np.abs(wave - lam) <= half
+    if m.sum() == 0 or (~m).sum() == 0:
+        return np.nan
+    return float(S_row[m].mean() / (S_row.mean() + 1e-12))
 
 
 def main():
@@ -143,33 +172,81 @@ def main():
     # ----------------------------------------------------------------------
     total = Smat.sum(axis=1)
     order = np.argsort(total)[::-1]
-    print("\n" + "=" * 78)
-    print(f"{'element':<8}{'total sens.':>13}{'peak at':>10}{'  known line?':<22}{'verdict'}")
-    print("-" * 78)
     strongest = total.max() + 1e-12
-    verdicts = {}
+
+    # ---------------- TEST A: elements WITHOUT lines here must be silent ----------------
+    print("\n" + "=" * 76)
+    print("TEST A -- elements whose STRONG lines lie OUTSIDE 4000-5000 A must be SILENT")
+    print("-" * 76)
+    silent_ok = True
     for i in order:
         el = P.VARIED_ELEMENTS[i]
+        if REFERENCE_LINES.get(el):
+            continue
         rel = total[i] / strongest
-        peak_lam = float(wave[np.argmax(Smat[i])])
-        refs = REFERENCE_LINES.get(el, [])
-        near = [l for l in refs if abs(l - peak_lam) <= args.tol]
-        if not refs:
-            # EN: element has NO lines here -> we EXPECT near-zero sensitivity
-            ok = rel < 0.10
-            verdict = "OK (no lines here, ~0 sens.)" if ok else "!! sensitive but has NO lines"
-            note = "expected: none"
-        else:
-            ok = bool(near)
-            verdict = "OK (peaks on its line)" if ok else "peak not on a known line"
-            note = f"{near[0]:.1f} A" if near else "-"
-        verdicts[el] = ok
-        print(f"{el:<8}{rel:>13.3f}{peak_lam:>10.1f}   {note:<19}{verdict}")
-    print("=" * 78)
-    n_ok = sum(verdicts.values())
-    print(f"\n{n_ok}/{len(verdicts)} elements behave as physics demands.")
-    print("Elements with NO lines in 4000-5000 A (Na, S, N, K) MUST show ~zero sensitivity;")
-    print("if they do, TransformerPayne learned physics, not correlations.")
+        ok = rel < 0.10
+        silent_ok &= ok
+        print(f"  {el:<4} relative sensitivity = {rel:5.3f}   "
+              f"{'OK (silent, as physics demands)' if ok else '!! LOUD but has no lines'}")
+    print(f"\n  -> TEST A {'PASSED' if silent_ok else 'FAILED'}")
+
+    # ---------------- TEST B: does each element control ITS OWN lines? ----------------
+    # EN: NOT a single-peak match -- Fe has hundreds of lines, so the global maximum pixel
+    #     is luck. We ask instead whether the sensitivity is systematically ENRICHED on the
+    #     element's own lines relative to its own average.
+    print("\n" + "=" * 76)
+    print("TEST B -- is each element's sensitivity ENRICHED on its own lines?")
+    print("          enrichment = <S at its own lines> / <S everywhere>   (1.0 = no preference)")
+    print("-" * 76)
+    enr = {}
+    for i in order:
+        el = P.VARIED_ELEMENTS[i]
+        lines = REFERENCE_LINES.get(el, [])
+        if not lines:
+            continue
+        e = enrichment(Smat[i], wave, lines)
+        enr[el] = e
+        verdict = ("OK (controls its own lines)" if e > 1.5 else
+                   "weak" if e > 1.15 else "!! no preference for its own lines")
+        print(f"  {el:<4} rel.sens={total[i]/strongest:5.3f}   enrichment = {e:5.2f}x   {verdict}")
+
+    # ---------------- TEST C: the cross-matrix -- the DECISIVE one ----------------
+    # EN: at the lines of element X, which element responds most strongly? If the emulator
+    #     learned physics, the DIAGONAL must dominate: Ca's lines must be controlled by Ca,
+    #     not by Fe. This is the test that a correlation-learner cannot pass.
+    # ES: en las lineas del elemento X, que elemento responde mas fuerte? La DIAGONAL debe
+    #     dominar. Es la prueba que un modelo que aprendio correlaciones no puede pasar.
+    print("\n" + "=" * 76)
+    print("TEST C -- CROSS-MATRIX: at the lines of element X (columns), which element")
+    print("          responds (rows)?  The DIAGONAL must dominate.")
+    print("-" * 76)
+    with_lines = [el for el in P.VARIED_ELEMENTS if REFERENCE_LINES.get(el)]
+    Cx = np.zeros((len(with_lines), len(with_lines)))
+    for a, el_resp in enumerate(with_lines):          # who responds
+        i = P.VARIED_ELEMENTS.index(el_resp)
+        for b, el_line in enumerate(with_lines):      # at whose lines
+            m = np.zeros_like(wave, dtype=bool)
+            for lam in REFERENCE_LINES[el_line]:
+                m |= np.abs(wave - lam) <= 2.0
+            Cx[a, b] = Smat[i][m].mean() if m.any() else np.nan
+    Cxn = Cx / (Cx.max(axis=0, keepdims=True) + 1e-12)   # normalize per column
+    hdr = "".join(f"{el:>7}" for el in with_lines)
+    print(f"{'responds':<10}{'| at the lines of ->':<0}")
+    print(f"{'':<10}{hdr}")
+    n_diag = 0
+    for a, el in enumerate(with_lines):
+        row = "".join(f"{Cxn[a, b]:>7.2f}" for b in range(len(with_lines)))
+        winner = with_lines[int(np.argmax(Cxn[:, a]))] if True else ""
+        print(f"{el:<10}{row}")
+    for b, el in enumerate(with_lines):
+        if with_lines[int(np.argmax(Cxn[:, b]))] == el:
+            n_diag += 1
+    print("-" * 76)
+    print(f"  -> the strongest responder is the CORRECT element for "
+          f"{n_diag}/{len(with_lines)} line groups")
+    print("     (Fe responds everywhere because it has hundreds of blended lines --")
+    print("      the meaningful question is whether Ca beats Fe ON CALCIUM's lines.)")
+    print("=" * 76)
 
     # ----------------------------------------------------------------------
     # EN: 3) try to read the REAL attention maps (may not be exposed by the package)
