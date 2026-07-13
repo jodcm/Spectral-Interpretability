@@ -1,0 +1,258 @@
+
+############################################################
+#  Spectral Interpretability - full run
+#  started Mon 07/13/2026 13:41:35.50
+#  cores detected: 12
+############################################################
+
+============================================================
+ STEP 1/9  Verify the H-beta fix (masked normalization)
+           -> the H-beta ratio DESI/SDSS must move 0.80 -> 1.00
+============================================================
+[balanceados_desi] N=250  <Teff>=5704 K
+[sdss] N=177  <Teff>=5736 K
+
+Line depths (1 - min flux) for class G, Teff 5500-5900 K:
+line        balanceados_desi        sdss   ratio A/B
+H-delta            0.427       0.354       1.21
+Ca I               0.429       0.325       1.32
+G-band CH          0.466       0.416       1.12
+H-gamma            0.455       0.383       1.19
+H-beta             0.363       0.387       0.94
+
+ratio < 1  => the lines are SHALLOWER in balanceados_desi -> its G stars look cooler -> K
+
+continuum slope per 1000 A:  balanceados_desi=+0.174   sdss=+0.073
+
+saved figures/spectra_compare_balanceados_desi_vs_sdss_G.png
+
+============================================================
+ STEP 2/9  Generate synthetic spectra at DESI resolution
+           (10k is plenty - the saturation curve plateaus at ~2000)
+============================================================
+CPU multiprocessing: 12 workers, 24 shards, 10000 spectra total
+  417/10000  | 4 spec/s  | ETA 2632s
+  834/10000  | 7 spec/s  | ETA 1261s
+  1251/10000  | 11 spec/s  | ETA 803s
+  1668/10000  | 15 spec/s  | ETA 575s
+  2085/10000  | 18 spec/s  | ETA 437s
+  2502/10000  | 22 spec/s  | ETA 346s
+  2915/10000  | 25 spec/s  | ETA 281s
+  3332/10000  | 29 spec/s  | ETA 232s
+  3749/10000  | 32 spec/s  | ETA 194s
+  4166/10000  | 35 spec/s  | ETA 165s
+  4583/10000  | 38 spec/s  | ETA 141s
+  5000/10000  | 42 spec/s  | ETA 119s
+  5417/10000  | 25 spec/s  | ETA 186s
+  5834/10000  | 27 spec/s  | ETA 157s
+  6251/10000  | 28 spec/s  | ETA 133s
+  6668/10000  | 30 spec/s  | ETA 111s
+  7085/10000  | 32 spec/s  | ETA 92s
+  7502/10000  | 34 spec/s  | ETA 74s
+  7919/10000  | 35 spec/s  | ETA 59s
+  8336/10000  | 37 spec/s  | ETA 45s
+  8753/10000  | 39 spec/s  | ETA 32s
+  9170/10000  | 41 spec/s  | ETA 20s
+  9587/10000  | 42 spec/s  | ETA 10s
+  10000/10000  | 44 spec/s  | ETA 0s
+
+saved sim_10k_masked.npz  shape=(10000, 1000)  dtype=float32  in 229s (44 spec/s)
+Next: python 07_train_large.py --data-npz sim_10k_masked.npz --real proyecto_desi/espectros_balanceados_desi --norm masked
+
+============================================================
+ STEP 3/9  Generate synthetic spectra at SDSS resolution (R=2000)
+============================================================
+CPU multiprocessing: 12 workers, 24 shards, 10000 spectra total
+  417/10000  | 4 spec/s  | ETA 2610s
+  834/10000  | 7 spec/s  | ETA 1249s
+  1251/10000  | 11 spec/s  | ETA 795s
+  1668/10000  | 15 spec/s  | ETA 568s
+  2085/10000  | 18 spec/s  | ETA 432s
+  2502/10000  | 22 spec/s  | ETA 342s
+  2919/10000  | 26 spec/s  | ETA 277s
+  3336/10000  | 29 spec/s  | ETA 230s
+  3749/10000  | 33 spec/s  | ETA 192s
+  4166/10000  | 36 spec/s  | ETA 162s
+  4583/10000  | 40 spec/s  | ETA 137s
+  5000/10000  | 42 spec/s  | ETA 119s
+  5417/10000  | 25 spec/s  | ETA 186s
+  5834/10000  | 27 spec/s  | ETA 157s
+  6251/10000  | 28 spec/s  | ETA 132s
+  6668/10000  | 30 spec/s  | ETA 111s
+  7085/10000  | 32 spec/s  | ETA 91s
+  7502/10000  | 34 spec/s  | ETA 74s
+  7919/10000  | 36 spec/s  | ETA 59s
+  8336/10000  | 37 spec/s  | ETA 45s
+  8753/10000  | 39 spec/s  | ETA 32s
+  9170/10000  | 41 spec/s  | ETA 20s
+  9587/10000  | 43 spec/s  | ETA 10s
+  10000/10000  | 44 spec/s  | ETA 0s
+
+saved sim_10k_sdss_masked.npz  shape=(10000, 1000)  dtype=float32  in 228s (44 spec/s)
+Next: python 07_train_large.py --data-npz sim_10k_sdss_masked.npz --real proyecto_desi/espectros_balanceados_desi --norm masked
+
+============================================================
+ STEP 4/9  SIM -> REAL : train on synthetic, test on real DESI
+============================================================
+loaded sim_10k_masked.npz: X=(10000, 1000) classes=['G', 'K'] counts={'G': 5000, 'K': 5000}
+RF trained in 2s on 8000 spectra
+simulated test accuracy: 0.994
+saved rf_large_balanceados_desi.joblib
+real labelled spectra per class: {'G': 150, 'K': 150} -> N = 300
+
+=== REAL accuracy [balanceados_desi] (RF trained on 10000 synthetic): 0.663 ===
+              precision    recall  f1-score   support
+
+           G       0.86      0.39      0.54       150
+           K       0.61      0.93      0.73       150
+
+    accuracy                           0.66       300
+   macro avg       0.73      0.66      0.64       300
+weighted avg       0.73      0.66      0.64       300
+
+saved figures/real_confusion_balanceados_desi.png
+
+============================================================
+ STEP 5/9  SIM -> REAL : train on synthetic, test on real SDSS
+============================================================
+loaded sim_10k_sdss_masked.npz: X=(10000, 1000) classes=['G', 'K'] counts={'G': 5000, 'K': 5000}
+RF trained in 3s on 8000 spectra
+simulated test accuracy: 0.994
+saved rf_large_sdss.joblib
+real labelled spectra per class: {'G': 150, 'K': 150} -> N = 300
+
+=== REAL accuracy [sdss] (RF trained on 10000 synthetic): 0.953 ===
+              precision    recall  f1-score   support
+
+           G       0.95      0.95      0.95       150
+           K       0.95      0.95      0.95       150
+
+    accuracy                           0.95       300
+   macro avg       0.95      0.95      0.95       300
+weighted avg       0.95      0.95      0.95       300
+
+saved figures/real_confusion_sdss.png
+
+============================================================
+ STEP 6/9  UPPER BOUND : train on REAL DESI, test on real DESI
+           (G/K, then the F/G/K extra experiment)
+============================================================
+REAL training set [balanceados_desi_GK]: {'G': 800, 'K': 800} -> N = 1600
+
+=== UPPER BOUND: RF trained on REAL balanceados_desi_GK, tested on held-out REAL: 0.838 ===
+              precision    recall  f1-score   support
+
+           G       0.81      0.88      0.84       200
+           K       0.86      0.80      0.83       200
+
+    accuracy                           0.84       400
+   macro avg       0.84      0.84      0.84       400
+weighted avg       0.84      0.84      0.84       400
+
+saved figures/real_trained_balanceados_desi_GK.png
+REAL training set [balanceados_desi_FGK]: {'F': 800, 'G': 800, 'K': 800} -> N = 2400
+
+=== UPPER BOUND: RF trained on REAL balanceados_desi_FGK, tested on held-out REAL: 0.712 ===
+              precision    recall  f1-score   support
+
+           F       0.67      0.84      0.74       200
+           G       0.75      0.48      0.59       200
+           K       0.75      0.81      0.77       200
+
+    accuracy                           0.71       600
+   macro avg       0.72      0.71      0.70       600
+weighted avg       0.72      0.71      0.70       600
+
+saved figures/real_trained_balanceados_desi_FGK.png
+
+============================================================
+ STEP 7/9  CROSS-SURVEY : train on real DESI -> test on real SDSS
+           (no simulation involved - do the instruments agree?)
+============================================================
+REAL training set [balanceados_desi_GK]: {'G': 800, 'K': 800} -> N = 1600
+
+=== UPPER BOUND: RF trained on REAL balanceados_desi_GK, tested on held-out REAL: 0.838 ===
+              precision    recall  f1-score   support
+
+           G       0.81      0.88      0.84       200
+           K       0.86      0.80      0.83       200
+
+    accuracy                           0.84       400
+   macro avg       0.84      0.84      0.84       400
+weighted avg       0.84      0.84      0.84       400
+
+saved figures/real_trained_balanceados_desi_GK.png
+
+=== CROSS-SURVEY: trained on REAL balanceados_desi_GK -> tested on REAL sdss: 0.815 ===
+    ({'G': 200, 'K': 200} -> N = 400)
+              precision    recall  f1-score   support
+
+           G       0.73      1.00      0.84       200
+           K       1.00      0.63      0.77       200
+
+    accuracy                           0.81       400
+   macro avg       0.86      0.81      0.81       400
+weighted avg       0.86      0.81      0.81       400
+
+
+  If this is ALSO low, the two instruments disagree -> the gap is
+  INSTRUMENTAL, independent of the simulation. If it is high, the
+  instruments agree and the sim->real gap is the emulator's fault.
+saved figures/cross_survey_balanceados_desi_GK_to_sdss.png
+
+============================================================
+ STEP 8/9  THE REFERENCE SCALE : sim-trained vs the ceiling
+           -> figures/summary_scale_GK.png  (the key figure)
+============================================================
+classes = G/K   normalizer = masked
+
+==============================================================
+                                          DESI        SDSS
+--------------------------------------------------------------
+(1) sim-trained  -> real                 0.637       0.961
+(2) real-trained -> real (CEILING)       0.838       0.946
+--------------------------------------------------------------
+    domain shift on DESI : +0.200   (ceiling 0.838 - sim 0.637)
+    domain shift on SDSS : -0.015   (ceiling 0.946 - sim 0.961)
+
+(4) cross-survey  real DESI -> real SDSS : 0.822   (NO simulation involved)
+==============================================================
+
+HOW TO READ / COMO LEER:
+  small domain shift  -> our sim-trained model is near the ceiling; the
+                         limit is the DATA (noise, labels), not the emulator.
+  large domain shift  -> the simulation really is missing something.
+
+saved figures/summary_scale_GK.png
+
+============================================================
+ STEP 9/9  SHAP interpretability on the new model
+============================================================
+model=rf_large_balanceados_desi.joblib classes=['G', 'K'] | explaining 800 spectra
+
+Top-10 wavelengths by |SHAP| (toward K):
+   4862.86 A   shap=1.000  <- H-beta
+   4863.86 A   shap=0.694  <- H-beta
+   4256.26 A   shap=0.608
+   4276.28 A   shap=0.589
+   4343.34 A   shap=0.517  <- H-gamma
+   4861.86 A   shap=0.512  <- H-beta
+   4647.65 A   shap=0.485
+   4243.24 A   shap=0.468
+   4342.34 A   shap=0.462  <- H-gamma
+   4122.12 A   shap=0.451
+
+saved figures/shap_importance.png
+
+############################################################
+#  DONE  Mon 07/13/2026 13:51:24.21
+#  All steps completed successfully.
+#
+#  Key figures in figures\ :
+#    summary_scale_GK.png            <- the reference scale (main result)
+#    spectra_compare_*_G.png         <- the H-beta fix
+#    real_confusion_*.png            <- sim->real confusion matrices
+#    real_trained_*.png              <- upper bound
+#    cross_survey_*.png              <- DESI -> SDSS
+#    shap_importance.png             <- interpretability
+############################################################
