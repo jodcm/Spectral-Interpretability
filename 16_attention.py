@@ -229,23 +229,33 @@ def main():
             for lam in REFERENCE_LINES[el_line]:
                 m |= np.abs(wave - lam) <= 2.0
             Cx[a, b] = Smat[i][m].mean() if m.any() else np.nan
-    Cxn = Cx / (Cx.max(axis=0, keepdims=True) + 1e-12)   # normalize per column
+    # EN: NORMALIZE PER ROW, not per column. Reading DOWN a column asks "who responds most
+    #     at this line?" -- and Fe wins almost everywhere, not because the emulator is wrong
+    #     but because iron has hundreds of lines that blend into everything in the blue
+    #     (line blanketing). That is astrophysics, not a model failure.
+    #     The MEANINGFUL question is read ACROSS a row: "where does THIS element respond
+    #     most?" If Ca's own lines are where Ca responds most strongly, the emulator has
+    #     learned the element<->line association.
+    # ES: NORMALIZAR POR FILA, no por columna. Leer una columna pregunta "quien responde mas
+    #     en esta linea?" -- y gana Fe casi siempre, no porque el emulador se equivoque sino
+    #     porque el hierro tiene cientos de lineas que se mezclan con todo en el azul.
+    #     La pregunta con sentido se lee POR FILA: "donde responde MAS este elemento?"
+    Cxr = Cx / (Cx.max(axis=1, keepdims=True) + 1e-12)   # normalize per ROW
     hdr = "".join(f"{el:>7}" for el in with_lines)
-    print(f"{'responds':<10}{'| at the lines of ->':<0}")
-    print(f"{'':<10}{hdr}")
-    n_diag = 0
+    print(f"{'responds':<10}{'| at the lines of ->'}")
+    print(f"{'(row)':<10}{hdr}")
+    n_ok = 0
     for a, el in enumerate(with_lines):
-        row = "".join(f"{Cxn[a, b]:>7.2f}" for b in range(len(with_lines)))
-        winner = with_lines[int(np.argmax(Cxn[:, a]))] if True else ""
-        print(f"{el:<10}{row}")
-    for b, el in enumerate(with_lines):
-        if with_lines[int(np.argmax(Cxn[:, b]))] == el:
-            n_diag += 1
+        row = "".join(f"{Cxr[a, b]:>7.2f}" for b in range(len(with_lines)))
+        best = with_lines[int(np.argmax(Cxr[a]))]
+        hit = (best == el)
+        n_ok += hit
+        print(f"{el:<10}{row}   -> strongest at {best}'s lines "
+              f"{'  OK (its OWN lines)' if hit else ''}")
     print("-" * 76)
-    print(f"  -> the strongest responder is the CORRECT element for "
-          f"{n_diag}/{len(with_lines)} line groups")
-    print("     (Fe responds everywhere because it has hundreds of blended lines --")
-    print("      the meaningful question is whether Ca beats Fe ON CALCIUM's lines.)")
+    print(f"  -> {n_ok}/{len(with_lines)} elements respond MOST STRONGLY on their OWN lines")
+    print("     (Fe is the exception by construction: it has hundreds of blended lines and")
+    print("      responds everywhere -- that is line blanketing, not a model error.)")
     print("=" * 76)
 
     # ----------------------------------------------------------------------

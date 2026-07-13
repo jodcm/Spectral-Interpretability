@@ -106,19 +106,60 @@ tpm.MHA = _MHAWithAttn
 
 
 # --------------------------------------------------------------------------
-def forward_with_attention(emu, log_wave, mu, spectral_parameters):
-    """EN: one forward pass, returning (output, {layer: attn}, kv_tokens).
-        attn per layer has shape (num_heads, seq_q, no_tokens).
-    ES: un forward, devolviendo (salida, {capa: atencion}, tokens)."""
+# EN: PATCH 2 -- THE SUBTLE ONE. The model wraps the per-wavelength network in
+#     nn.vmap(..., variable_axes={'params': None}). A lifted Flax transform only carries
+#     through the collections listed in `variable_axes` -- so our sown 'intermediates'
+#     were computed and then silently DISCARDED by the vmap. Adding 'intermediates': 0
+#     lets them out, with the wavelength as the leading axis.
+# ES: PARCHE 2 -- EL SUTIL. El modelo envuelve la red por longitud de onda en
+#     nn.vmap(..., variable_axes={'params': None}). Una transformacion "lifted" de Flax
+#     solo deja pasar las colecciones listadas en `variable_axes`, asi que nuestros
+#     'intermediates' se calculaban y luego se DESCARTABAN. Agregar 'intermediates': 0
+#     los deja salir, con la longitud de onda como eje principal.
+# --------------------------------------------------------------------------
+class _TPModelWithAttn(tpm.TransformerPayneModel):
+    @nn.compact
+    def __call__(self, inputs, train):
+        log_waves, p = inputs
+        TP = nn.vmap(
+            tpm.TransformerPayneModelWave,
+            in_axes=((None, 0),), out_axes=0,
+            variable_axes={'params': None, 'intermediates': 0},   # <<< THE FIX
+            split_rngs={'params': False})
+        return TP(name="transformer_payne",
+                  dim=self.dim, dim_ff_multiplier=self.dim_ff_multiplier,
+                  no_tokens=self.no_tokens, no_layers=self.no_layers,
+                  dim_head=self.dim_head, out_dim=self.out_dim, input_dim=self.input_dim,
+                  min_period=self.min_period, max_period=self.max_period,
+                  bias_dense=self.bias_dense, bias_attention=self.bias_attention,
+                  activation_fn=self.activation_fn,
+                  output_activation_fn=self.output_activation_fn,
+                  init_att_q=self.init_att_q, init_att_o=self.init_att_o,
+                  emb_init=self.emb_init, ff_init=self.ff_init, head_init=self.head_init,
+                  sigma=self.sigma, alpha_emb=self.alpha_emb, alpha_att=self.alpha_att,
+                  reference_depth=self.reference_depth,
+                  reference_width=self.reference_width)((p, log_waves))
+
+
+_TPModelWithAttn.__name__ = "TransformerPayneModel"
+tpm.TransformerPayneModel = _TPModelWithAttn
+
+
+# --------------------------------------------------------------------------
+def forward_with_attention(emu, log_waves, mu, spectral_parameters):
+    """EN: ONE forward pass over ALL wavelengths at once (the model is vmapped over them).
+        -> (output, {layer: attn (n_waves, heads, tokens)}, kv_tokens (tokens, dim))
+    ES: UN solo forward sobre TODAS las longitudes de onda (el modelo esta vmapeado)."""
     p_all = jnp.concatenate([spectral_parameters, jnp.atleast_1d(mu)], axis=0)
     p_all = (p_all - emu.min_parameters) / (emu.max_parameters - emu.min_parameters)
     out, state = emu.model.apply(
         {"params": freeze(emu.model_definition.emulator_weights)},
-        (jnp.atleast_1d(log_wave), p_all),
+        (jnp.asarray(log_waves), p_all),
         train=False,
         mutable=["intermediates"],
     )
-    inter = state["intermediates"]
+    if "intermediates" not in state:
+        raise SystemExit("[ERROR] attention was not captured -- the Flax patch did not take.")
 
     attn, kv = {}, None
     def walk(d, path=""):
@@ -127,11 +168,12 @@ def forward_with_attention(emu, log_wave, mu, spectral_parameters):
             if isinstance(v, dict):
                 walk(v, f"{path}/{k}")
             elif k == "attn":
-                a = np.asarray(v[0])
-                attn[path] = np.squeeze(a)             # (heads, seq_q, tokens)
+                a = np.asarray(v[0])                  # (n_waves, heads, seq_q, tokens)
+                attn[path.strip('/')] = a[:, :, 0, :] if a.ndim == 4 else a
             elif k == "kv" and kv is None:
-                kv = np.asarray(v[0])
-    walk(inter)
+                k0 = np.asarray(v[0])                 # (n_waves, tokens, dim)
+                kv = k0[0] if k0.ndim == 3 else k0    # tokens depend only on the parameters
+    walk(state["intermediates"])
     return np.asarray(out), attn, kv
 
 
@@ -174,22 +216,11 @@ def main():
     # ----------------------------------------------------------------------
     # EN: 1) attention at every line | ES: 1) atencion en cada linea
     # ----------------------------------------------------------------------
-    print(f"\nrunning {len(waves)} forward passes (one per line) and capturing attention...")
-    A = {}   # layer -> (n_lines, heads, tokens)
-    kv0 = None
-    for i, w in enumerate(waves):
-        _, attn, kv = forward_with_attention(emu, np.log10(w), mu, pvec)
-        if kv0 is None:
-            kv0 = kv
-        for layer, a in attn.items():
-            a = np.atleast_2d(a)                      # (heads, tokens) after squeeze
-            if a.ndim == 3:                           # (heads, seq_q, tokens)
-                a = a[:, 0, :]
-            A.setdefault(layer, np.zeros((len(waves), a.shape[0], a.shape[1])))
-            A[layer][i] = a
+    print(f"\none vmapped forward pass over {len(waves)} line wavelengths, capturing attention...")
+    _, A, kv0 = forward_with_attention(emu, np.log10(waves), mu, pvec)
     layers = sorted(A.keys())
     print(f"captured attention from {len(layers)} attention blocks; "
-          f"shape per block = {A[layers[0]].shape} (lines, heads, tokens)")
+          f"shape per block = {A[layers[0]].shape}  (lines, heads, tokens)")
 
     # ----------------------------------------------------------------------
     # EN: 2) token <-> parameter map: perturb each label, see which token moves
@@ -197,16 +228,17 @@ def main():
     # ----------------------------------------------------------------------
     print("building the token <-> parameter map...")
     labels = ["logteff", "logg"] + list(P.VARIED_ELEMENTS)
-    n_tok = kv0.shape[-2] if kv0.ndim >= 2 else kv0.shape[0]
+    n_tok = kv0.shape[0]
+    probe = np.log10(np.array([4500.0]))
     T = np.zeros((n_tok, len(labels)))
     for j, lab in enumerate(labels):
         hi, lo = dict(base), dict(base)
         step = 0.02 if lab == "logteff" else args.delta
         hi[lab] = base[lab] + step
         lo[lab] = base[lab] - step
-        _, _, kv_hi = forward_with_attention(emu, np.log10(4500.0), mu, emu.to_parameters(hi))
-        _, _, kv_lo = forward_with_attention(emu, np.log10(4500.0), mu, emu.to_parameters(lo))
-        d = np.squeeze(kv_hi) - np.squeeze(kv_lo)     # (tokens, dim)
+        _, _, kv_hi = forward_with_attention(emu, probe, mu, emu.to_parameters(hi))
+        _, _, kv_lo = forward_with_attention(emu, probe, mu, emu.to_parameters(lo))
+        d = kv_hi - kv_lo                              # (tokens, dim)
         T[:, j] = np.linalg.norm(d.reshape(n_tok, -1), axis=1)
     Tn = T / (T.max(axis=0, keepdims=True) + 1e-12)   # normalize per parameter
 
