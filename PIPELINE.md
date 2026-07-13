@@ -21,6 +21,8 @@ importa `project_lib` igual que los scripts.
 | `06_generate_large.py` | scale-up: batched generation of ~100k synthetic spectra -> .npz (see SCALE_100K.md) | escalado: generacion por lotes de ~100k espectros -> .npz (ver SCALE_100K.md) | yes |
 | `07_train_large.py` | train RF from the large .npz (fixed hyperparams) + real eval | entrena RF desde el .npz grande (hiperparams fijos) + eval real | no |
 | `08_shap.py` | SHAP interpretability: which wavelengths/lines drive G/K | interpretabilidad SHAP: que longitudes de onda/lineas deciden G/K | no |
+| `14_train_real.py` | train on REAL spectra: upper bound + F/G/K + cross-survey | entrena con REALES: cota superior + F/G/K + entre surveys | no |
+| `15_summary.py` | the reference scale: sim-trained vs the ceiling, one figure | la escala de referencia: sim vs cota superior, una figura | no |
 | `09_payne_compare.py` | 2nd emulator: train a Payne MLP, compare real accuracy vs TransformerPayne | 2do emulador: entrena un Payne MLP, compara accuracy real vs TransformerPayne | yes |
 | `ingest_lamost.py` | convert LAMOST LRS FITS -> per-class CSVs (2nd real dataset) | convierte FITS LAMOST LRS -> CSV por clase (2do dataset real) | no |
 
@@ -58,6 +60,45 @@ whether the R(lambda) broadening reduces this gap.
 **ES:** accuracy G/K simulada ~0.958 vs **DESI REAL ~0.64** -> el domain shift
 sim->real esta ahora cuantificado (muchas estrellas K reales predichas como G). El
 paso 3 prueba si el ensanchamiento R(lambda) reduce esta brecha.
+
+## The reference scale / La escala de referencia
+
+**EN:** The project trains on SYNTHETIC spectra and tests on REAL ones -- that is the whole
+point, and training on real data is NOT an alternative method. But a number like "0.76 on
+DESI" cannot be judged without a reference: good or bad compared to what? So `14_train_real.py`
+trains an RF **directly on the real spectra** (train/test split on the same survey) to get the
+**upper bound** -- how well can ANY model do with this data and these labels? `15_summary.py`
+then puts both on one axis:
+
+* **gap small** -> our sim-trained model is already near the ceiling; the limit is the DATA
+  (noise, label precision), not the emulator. The sim->real approach is vindicated.
+* **gap large** -> the simulation really is missing something.
+
+Reporting "source-only" (sim-trained) together with "target-supervised" (real-trained) is
+standard practice in domain-adaptation work; the gap between them IS the domain shift.
+`14_train_real.py --test-real ...` additionally measures real DESI -> real SDSS, i.e. whether
+the two instruments agree with each other at all -- with NO simulation involved.
+
+**ES:** El proyecto entrena con SINTETICOS y prueba en REALES -- eso es lo central, y entrenar
+con reales NO es un metodo alternativo. Pero un numero como "0.76 en DESI" no se puede juzgar
+sin referencia. `14_train_real.py` entrena directamente con los espectros reales para obtener
+la **cota superior**, y `15_summary.py` pone ambos en un mismo eje. La brecha entre los dos ES
+el domain shift.
+
+## F as an extra experiment / F como experimento extra
+
+**EN:** F is included **only as an additional experiment**, never as the main claim:
+* **Real training** (`14_train_real.py --classes F G K`): no problem at all -- real data needs
+  no emulator. Cata's DESI folder has 1000 labelled spectra for every class (O B A F G K M).
+* **Synthetic side** (`06_generate_large.py --classes F G K`): works, BUT TransformerPayne is
+  validated for dwarfs at ~4000-6000 K, and F sits at 6100-7000 K, i.e. at/past the edge of its
+  grid. Any F result from the synthetic side must be labelled as **outside the emulator's
+  validated range**. The main G/K conclusions do not depend on it.
+
+**ES:** F se incluye **solo como experimento extra**, nunca como afirmacion principal. Con datos
+REALES no hay problema. En el lado SINTETICO, TransformerPayne esta validado para enanas de
+~4000-6000 K y F cae en 6100-7000 K -- al borde o fuera de su grilla. Cualquier resultado F
+sintetico debe marcarse como **fuera del rango validado del emulador**.
 
 ---
 *EN: `project_lib.py` = shared library; scripts = runners; notebook = demo.
