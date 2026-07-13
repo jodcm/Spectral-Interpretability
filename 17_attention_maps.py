@@ -260,38 +260,78 @@ def main():
         print(f"   {layer}  head {h}   specialization = {spec:.4f}")
 
     # ----------------------------------------------------------------------
-    # EN: 4) the figure -- paper Fig. 9 style
+    # EN: 4) QUANTITATIVE read-out -- do not make the reader squint at a heatmap.
+    #        For every selected head: at each line, which token does it attend to most?
+    #        If a head attends to the SAME token at all three Balmer lines, it is a
+    #        "hydrogen head". That is the paper's claim, made checkable.
+    # ES: 4) Lectura CUANTITATIVA -- si una cabeza mira el MISMO token en las tres lineas
+    #        de Balmer, es una "cabeza de hidrogeno". La afirmacion del paper, verificable.
+    # ----------------------------------------------------------------------
+    BALMER = [n for n in names if n.startswith("H-")]
+    print("\n" + "=" * 78)
+    print("WHICH TOKEN DOES EACH HEAD LOOK AT, LINE BY LINE?")
+    print("=" * 78)
+    for spec, layer, h in top:
+        M = A[layer][:, h, :]                          # (lines, tokens)
+        tok = M.argmax(axis=1)
+        lname = layer.replace("transformer_payne/", "")
+        print(f"\n  [{lname}  head {h}]   specialization = {spec:.4f}")
+        for i, nm in enumerate(names):
+            bar = "#" * int(round(20 * M[i, tok[i]] / (M.max() + 1e-12)))
+            print(f"     {nm:<16} -> token {tok[i]:2d}   {M[i, tok[i]]:.3f}  {bar}")
+        bt = [tok[names.index(b)] for b in BALMER]
+        if len(set(bt)) == 1:
+            print(f"     >>> ALL {len(BALMER)} BALMER LINES point at the SAME token ({bt[0]}) "
+                  f"-> this is a HYDROGEN / TEMPERATURE head")
+
+    # ----------------------------------------------------------------------
+    # EN: 5) the figure -- paper Fig. 9 style, with a readable layout:
+    #        shared x-axis, tick labels ONLY on the bottom panel, head name as an inset.
+    # ES: 5) la figura -- estilo Fig. 9, con layout legible.
     # ----------------------------------------------------------------------
     nrow = 1 + len(top)
-    fig = plt.figure(figsize=(13, 2.6 + 1.9 * len(top)))
-    gs = fig.add_gridspec(nrow, 1, hspace=0.55)
+    fig, axes = plt.subplots(nrow, 1, figsize=(12, 2.9 + 1.75 * len(top)),
+                             gridspec_kw={"height_ratios": [1.35] + [1.0] * len(top),
+                                          "hspace": 0.18})
 
-    ax = fig.add_subplot(gs[0])
-    im = ax.imshow(Tn, aspect="auto", origin="lower", cmap="Reds")
+    # --- top: token <-> parameter
+    ax = axes[0]
+    im = ax.imshow(Tn, aspect="auto", origin="lower", cmap="Reds", vmin=0, vmax=1)
     ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=90, fontsize=8)
-    ax.set_ylabel("Token index")
-    ax.set_xlabel("Spectrum parameters")
-    ax.set_title(f"Which token carries which stellar parameter?  "
-                 f"(reference {args.cls} star, Teff={teff:.0f} K)", fontsize=11)
-    fig.colorbar(im, ax=ax, pad=0.01)
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+    ax.xaxis.set_ticks_position("top")
+    ax.xaxis.set_label_position("top")
+    ax.set_xlabel("Stellar parameter", fontsize=9, labelpad=6)
+    ax.set_ylabel("Token index", fontsize=9)
+    ax.text(0.005, 1.42, f"Which token carries which stellar parameter?   "
+            f"(reference {args.cls} star, Teff={teff:.0f} K)",
+            transform=ax.transAxes, fontsize=11, fontweight="bold", va="bottom")
+    fig.colorbar(im, ax=ax, pad=0.012, fraction=0.03)
 
+    # --- the attention maps
     for r, (spec, layer, h) in enumerate(top, start=1):
-        ax = fig.add_subplot(gs[r])
-        M = A[layer][:, h, :].T                       # (tokens, lines)
+        ax = axes[r]
+        M = A[layer][:, h, :].T                        # (tokens, lines)
         im = ax.imshow(M, aspect="auto", origin="lower", cmap="Reds")
         ax.set_xticks(range(len(names)))
-        ax.set_xticklabels(names, rotation=90, fontsize=7)
-        ax.set_ylabel("Token index")
-        lname = layer.strip("/").replace("/", " ")
-        ax.set_title(f"Attention map -- {lname}, head {h}", fontsize=10)
-        fig.colorbar(im, ax=ax, pad=0.01)
+        ax.set_ylabel("Token", fontsize=9)
+        lname = layer.replace("transformer_payne/", "").replace("MHA_", "layer ")
+        # EN: head name INSIDE the axes -> can never collide with the panel above
+        ax.text(0.008, 0.90, f"{lname}, head {h}", transform=ax.transAxes,
+                fontsize=9, fontweight="bold", va="top",
+                bbox=dict(fc="white", ec="0.6", alpha=0.85, pad=2.0))
+        if r == nrow - 1:
+            ax.set_xticklabels(names, rotation=45, ha="right", fontsize=8)
+            ax.set_xlabel("Spectral line", fontsize=9)
+        else:
+            ax.set_xticklabels([])
+        fig.colorbar(im, ax=ax, pad=0.012, fraction=0.03)
 
-    fig.suptitle("TransformerPayne attention maps (cf. paper Fig. 9): "
-                 "at each spectral line, which parameter-token does the head look at?",
-                 fontsize=12, y=0.995)
+    fig.suptitle("TransformerPayne attention maps (cf. paper Fig. 9)\n"
+                 "at each spectral line, which parameter-token does the head attend to?",
+                 fontsize=12.5, y=0.995)
     out = f"figures/attention_maps_{args.cls}.png"
-    plt.savefig(out, dpi=130, bbox_inches="tight")
+    plt.savefig(out, dpi=140, bbox_inches="tight")
     plt.close()
     print(f"\nsaved {out}")
 
