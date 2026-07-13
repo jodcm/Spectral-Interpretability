@@ -73,7 +73,7 @@ def main():
                     help="real spectra per class for training")
     ap.add_argument("--test-n", type=int, default=200, dest="test_n",
                     help="real spectra per class for the cross-survey test")
-    ap.add_argument("--norm", default="masked", choices=["masked", "iterative", "percentile"])
+    ap.add_argument("--norm", default="iterative", choices=["iterative", "masked", "percentile"])
     ap.add_argument("--min-logg", type=float, default=None, dest="min_logg")
     ap.add_argument("--test-size", type=float, default=0.25, dest="test_size")
     ap.add_argument("--n-estimators", type=int, default=300, dest="n_estimators")

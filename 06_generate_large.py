@@ -158,10 +158,10 @@ def main():
                          "'Out of memory' (each spectrum on the fine grid is memory-heavy; "
                          "peak RAM ~ jobs * batch). Try 16-32 on CPU, larger only on GPU.")
     ap.add_argument("--resolution", default="desi", help="'desi' R(lambda), a number, or 'none'")
-    ap.add_argument("--norm", default="masked",
-                    choices=["masked", "iterative", "percentile"],
-                    help="continuum normalizer (must match training). 'masked' = line-masked "
-                         "continuum fit, the H-beta fix (recommended).")
+    ap.add_argument("--norm", default="iterative",
+                    choices=["iterative", "masked", "percentile"],
+                    help="continuum normalizer (must match training). 'iterative' is the best "
+                         "configuration; 'masked' is the H-beta experiment (worse on DESI).")
     ap.add_argument("--sigma-noise", type=float, default=0.02, dest="sigma_noise")
     ap.add_argument("--oversample", type=int, default=6, help="fine-grid factor before broadening")
     ap.add_argument("--float64", action="store_true", help="use x64 (slower; default float32)")

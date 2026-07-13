@@ -41,9 +41,13 @@ def main():
     ap.add_argument("--data-npz", required=True, dest="data_npz", help="output of 06_generate_large.py")
     ap.add_argument("--real", default="proyecto_desi/espectros_balanceados_desi",
                     help="folder with per-class labelled real DESI spectra")
-    ap.add_argument("--norm", default="masked", choices=["masked", "iterative", "percentile"],
-                    help="MUST match the normalizer used to generate the .npz. "
-                         "'masked' = line-masked continuum fit (the H-beta fix)")
+    # EN: 'iterative' is the BEST configuration (DESI 0.760, SDSS 0.953). 'masked' fixed
+    #     H-beta (ratio 0.80 -> 0.94) but over-deepened every other line and made DESI's
+    #     sim->real WORSE (0.760 -> 0.637): kept as a documented negative result.
+    # ES: 'iterative' es la MEJOR configuracion. 'masked' arreglo H-beta pero profundizo
+    #     de mas el resto de las lineas y EMPEORO DESI: resultado negativo documentado.
+    ap.add_argument("--norm", default="iterative", choices=["iterative", "masked", "percentile"],
+                    help="MUST match the normalizer used to generate the .npz")
     ap.add_argument("--real-n", type=int, default=150, dest="real_n", help="real spectra per class")
     # EN: restrict the REAL sample to the emulator's training domain (dwarfs only!).
     #     The DESI sample contains ~17% giants (logg<3.5) that the synthetic grid never

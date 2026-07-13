@@ -1,26 +1,33 @@
 @echo off
 REM ============================================================================
 REM run_all.bat - runs the FULL analysis on the Windows VM, step by step.
-REM EN: Executes every step of the study in the right order, skipping the
-REM     expensive generation steps if their .npz already exists. Prints a clear
-REM     header before each step and a summary of failures at the end.
-REM ES: Ejecuta todos los pasos del estudio en orden, saltando la generacion
-REM     costosa si el .npz ya existe. Imprime un encabezado por paso y un
-REM     resumen de fallos al final.
+REM
+REM EN: MAIN PATH uses the 'iterative' normalizer -- the BEST configuration
+REM     (DESI 0.760, SDSS 0.953). The 'masked' normalizer (the H-beta fix) is run
+REM     afterwards as a documented COMPARISON: it does repair H-beta (depth ratio
+REM     DESI/SDSS 0.80 -> 0.94) but over-deepens every other line and makes DESI's
+REM     sim->real WORSE (0.760 -> 0.637). Both summaries are produced so the two
+REM     can be shown side by side.
+REM ES: El CAMINO PRINCIPAL usa el normalizador 'iterative' -- la MEJOR configuracion.
+REM     El 'masked' (el fix de H-beta) se corre despues como COMPARACION documentada:
+REM     arregla H-beta pero profundiza de mas el resto y EMPEORA DESI.
 REM
 REM Usage / Uso (Anaconda Prompt, in the repo folder):
 REM     conda activate astro-jax
 REM     run_all.bat
-REM
-REM To save everything to a log file / para guardar todo en un log:
-REM     run_all.bat > run_all_log.txt 2>&1
+REM     run_all.bat > run_all_log.txt 2>&1     ^<- to save a log
 REM ============================================================================
 setlocal enabledelayedexpansion
 
 set DESI=proyecto_desi\espectros_balanceados_desi
 set SDSS=proyecto_desi\espectros_sdss
-set SIM_DESI=sim_10k_masked.npz
-set SIM_SDSS=sim_10k_sdss_masked.npz
+REM --- main path: iterative (best) ---
+set SIM_DESI=sim_10k_iter.npz
+set SIM_SDSS=sim_10k_sdss_iter.npz
+REM --- comparison: masked (H-beta fix) ---
+set SIM_DESI_M=sim_10k_masked.npz
+set SIM_SDSS_M=sim_10k_sdss_masked.npz
+
 set NPC=5000
 set JOBS=%NUMBER_OF_PROCESSORS%
 set BATCH=16
@@ -29,147 +36,139 @@ set FAILED=
 echo.
 echo ############################################################
 echo #  Spectral Interpretability - full run
-echo #  started %DATE% %TIME%
-echo #  cores detected: %JOBS%
+echo #  started %DATE% %TIME%   ^| cores: %JOBS%
 echo ############################################################
 
-REM ---------------------------------------------------------------- checks
 python -c "import transformer_payne, jax, sklearn, shap" 2>nul
 if errorlevel 1 (
   echo [ERROR] environment not ready. Run:  conda activate astro-jax
-  echo         ^(and once:  pip install -r requirements.txt^)
   exit /b 1
 )
-if not exist "%DESI%" (
-  echo [ERROR] real DESI folder not found: %DESI%
-  exit /b 1
-)
+if not exist "%DESI%" ( echo [ERROR] missing %DESI% & exit /b 1 )
 if not exist "%SDSS%" (
-  echo [WARN] real SDSS folder not found: %SDSS%
-  echo        Fetch it first:  python 00_fetch_sdss.py --classes G K --n 300
-  echo        Steps involving SDSS will be skipped.
+  echo [WARN] missing %SDSS% - fetch with: python 00_fetch_sdss.py --classes G K --n 300
+  echo        SDSS steps will be skipped.
 )
 
 REM ================================================================ STEP 1
 echo.
 echo ============================================================
-echo  STEP 1/9  Verify the H-beta fix (masked normalization)
-echo            -^> the H-beta ratio DESI/SDSS must move 0.80 -^> 1.00
+echo  STEP 1/10  Generate synthetic - DESI resolution, ITERATIVE norm
 echo ============================================================
-if exist "%SDSS%" (
-  python 13_spectra_compare.py --a %DESI% --b %SDSS% --class G --teff 5500 5900 --norm masked
-  if errorlevel 1 set FAILED=!FAILED! [1-hbeta-check]
-) else (
-  echo [skip] needs SDSS
+if exist "%SIM_DESI%" ( echo [skip] %SIM_DESI% exists. ) else (
+  python 06_generate_large.py --n %NPC% --out %SIM_DESI% --jobs %JOBS% --batch %BATCH% --resolution desi --norm iterative
+  if errorlevel 1 set FAILED=!FAILED! [1]
 )
 
 REM ================================================================ STEP 2
 echo.
 echo ============================================================
-echo  STEP 2/9  Generate synthetic spectra at DESI resolution
-echo            (10k is plenty - the saturation curve plateaus at ~2000)
+echo  STEP 2/10  Generate synthetic - SDSS resolution (R=2000), ITERATIVE
 echo ============================================================
-if exist "%SIM_DESI%" (
-  echo [skip] %SIM_DESI% already exists. Delete it to regenerate.
-) else (
-  python 06_generate_large.py --n %NPC% --out %SIM_DESI% --jobs %JOBS% --batch %BATCH% --resolution desi --norm masked
-  if errorlevel 1 set FAILED=!FAILED! [2-generate-desi]
+if exist "%SIM_SDSS%" ( echo [skip] %SIM_SDSS% exists. ) else (
+  python 06_generate_large.py --n %NPC% --out %SIM_SDSS% --jobs %JOBS% --batch %BATCH% --resolution 2000 --norm iterative
+  if errorlevel 1 set FAILED=!FAILED! [2]
 )
 
 REM ================================================================ STEP 3
 echo.
 echo ============================================================
-echo  STEP 3/9  Generate synthetic spectra at SDSS resolution (R=2000)
+echo  STEP 3/10  SIM -^> REAL  : synthetic -^> real DESI   (iterative)
 echo ============================================================
-if exist "%SIM_SDSS%" (
-  echo [skip] %SIM_SDSS% already exists. Delete it to regenerate.
-) else (
-  python 06_generate_large.py --n %NPC% --out %SIM_SDSS% --jobs %JOBS% --batch %BATCH% --resolution 2000 --norm masked
-  if errorlevel 1 set FAILED=!FAILED! [3-generate-sdss]
-)
+python 07_train_large.py --data-npz %SIM_DESI% --real %DESI% --norm iterative
+if errorlevel 1 set FAILED=!FAILED! [3]
 
 REM ================================================================ STEP 4
 echo.
 echo ============================================================
-echo  STEP 4/9  SIM -^> REAL : train on synthetic, test on real DESI
+echo  STEP 4/10  SIM -^> REAL  : synthetic -^> real SDSS   (iterative)
 echo ============================================================
-python 07_train_large.py --data-npz %SIM_DESI% --real %DESI% --norm masked
-if errorlevel 1 set FAILED=!FAILED! [4-sim2real-desi]
+if exist "%SDSS%" (
+  python 07_train_large.py --data-npz %SIM_SDSS% --real %SDSS% --norm iterative
+  if errorlevel 1 set FAILED=!FAILED! [4]
+) else ( echo [skip] needs SDSS )
 
 REM ================================================================ STEP 5
 echo.
 echo ============================================================
-echo  STEP 5/9  SIM -^> REAL : train on synthetic, test on real SDSS
+echo  STEP 5/10  UPPER BOUND : real-trained on DESI  (G/K, then F/G/K)
+echo             -^> how well can ANY model do with this data?
 echo ============================================================
-if exist "%SDSS%" (
-  python 07_train_large.py --data-npz %SIM_SDSS% --real %SDSS% --norm masked
-  if errorlevel 1 set FAILED=!FAILED! [5-sim2real-sdss]
-) else (
-  echo [skip] needs SDSS
-)
+python 14_train_real.py --real %DESI% --classes G K --norm iterative
+if errorlevel 1 set FAILED=!FAILED! [5a]
+python 14_train_real.py --real %DESI% --classes F G K --norm iterative
+if errorlevel 1 set FAILED=!FAILED! [5b]
 
 REM ================================================================ STEP 6
 echo.
 echo ============================================================
-echo  STEP 6/9  UPPER BOUND : train on REAL DESI, test on real DESI
-echo            (G/K, then the F/G/K extra experiment)
+echo  STEP 6/10  UPPER BOUND : real-trained on SDSS  (G/K)
 echo ============================================================
-python 14_train_real.py --real %DESI% --classes G K --norm masked
-if errorlevel 1 set FAILED=!FAILED! [6a-real-GK]
-python 14_train_real.py --real %DESI% --classes F G K --norm masked
-if errorlevel 1 set FAILED=!FAILED! [6b-real-FGK]
+if exist "%SDSS%" (
+  python 14_train_real.py --real %SDSS% --classes G K --norm iterative
+  if errorlevel 1 set FAILED=!FAILED! [6]
+) else ( echo [skip] needs SDSS )
 
 REM ================================================================ STEP 7
 echo.
 echo ============================================================
-echo  STEP 7/9  CROSS-SURVEY : train on real DESI -^> test on real SDSS
-echo            (no simulation involved - do the instruments agree?)
+echo  STEP 7/10  CROSS-SURVEY : real DESI -^> real SDSS  (no simulation)
 echo ============================================================
 if exist "%SDSS%" (
-  python 14_train_real.py --real %DESI% --test-real %SDSS% --classes G K --norm masked
-  if errorlevel 1 set FAILED=!FAILED! [7-cross-survey]
-) else (
-  echo [skip] needs SDSS
-)
+  python 14_train_real.py --real %DESI% --test-real %SDSS% --classes G K --norm iterative
+  if errorlevel 1 set FAILED=!FAILED! [7]
+) else ( echo [skip] needs SDSS )
 
 REM ================================================================ STEP 8
 echo.
 echo ============================================================
-echo  STEP 8/9  THE REFERENCE SCALE : sim-trained vs the ceiling
-echo            -^> figures/summary_scale_GK.png  (the key figure)
+echo  STEP 8/10  *** THE REFERENCE SCALE *** (iterative = best config)
+echo             -^> figures\summary_scale_GK_iterative.png   MAIN FIGURE
 echo ============================================================
-python 15_summary.py --sim-desi %SIM_DESI% --sim-sdss %SIM_SDSS% --desi %DESI% --sdss %SDSS% --classes G K --norm masked
-if errorlevel 1 set FAILED=!FAILED! [8-summary]
+python 15_summary.py --sim-desi %SIM_DESI% --sim-sdss %SIM_SDSS% --desi %DESI% --sdss %SDSS% --classes G K --norm iterative
+if errorlevel 1 set FAILED=!FAILED! [8]
 
 REM ================================================================ STEP 9
 echo.
 echo ============================================================
-echo  STEP 9/9  SHAP interpretability on the new model
+echo  STEP 9/10  COMPARISON: the 'masked' H-beta experiment
+echo             -^> repairs H-beta but hurts DESI overall (negative result)
+echo ============================================================
+if exist "%SDSS%" (
+  python 13_spectra_compare.py --a %DESI% --b %SDSS% --class G --teff 5500 5900 --norm iterative
+  python 13_spectra_compare.py --a %DESI% --b %SDSS% --class G --teff 5500 5900 --norm masked
+)
+if exist "%SIM_DESI_M%" ( echo [skip] %SIM_DESI_M% exists. ) else (
+  python 06_generate_large.py --n %NPC% --out %SIM_DESI_M% --jobs %JOBS% --batch %BATCH% --resolution desi --norm masked
+)
+if exist "%SIM_SDSS_M%" ( echo [skip] %SIM_SDSS_M% exists. ) else (
+  python 06_generate_large.py --n %NPC% --out %SIM_SDSS_M% --jobs %JOBS% --batch %BATCH% --resolution 2000 --norm masked
+)
+python 15_summary.py --sim-desi %SIM_DESI_M% --sim-sdss %SIM_SDSS_M% --desi %DESI% --sdss %SDSS% --classes G K --norm masked
+if errorlevel 1 set FAILED=!FAILED! [9]
+
+REM ================================================================ STEP 10
+echo.
+echo ============================================================
+echo  STEP 10/10  SHAP interpretability on the best model
 echo ============================================================
 if exist rf_large_balanceados_desi.joblib (
   python 08_shap.py --data-npz %SIM_DESI% --model rf_large_balanceados_desi.joblib
-  if errorlevel 1 set FAILED=!FAILED! [9-shap]
-) else (
-  echo [skip] model not found - step 4 must succeed first.
-)
+  if errorlevel 1 set FAILED=!FAILED! [10]
+) else ( echo [skip] step 3 must succeed first. )
 
 REM ---------------------------------------------------------------- summary
 echo.
 echo ############################################################
 echo #  DONE  %DATE% %TIME%
-if "%FAILED%"=="" (
-  echo #  All steps completed successfully.
-) else (
-  echo #  FAILED STEPS: %FAILED%
-)
+if "%FAILED%"=="" ( echo #  All steps completed successfully. ) else ( echo #  FAILED: %FAILED% )
 echo #
-echo #  Key figures in figures\ :
-echo #    summary_scale_GK.png            ^<- the reference scale (main result)
-echo #    spectra_compare_*_G.png         ^<- the H-beta fix
-echo #    real_confusion_*.png            ^<- sim-^>real confusion matrices
-echo #    real_trained_*.png              ^<- upper bound
-echo #    cross_survey_*.png              ^<- DESI -^> SDSS
-echo #    shap_importance.png             ^<- interpretability
+echo #  MAIN FIGURE : figures\summary_scale_GK_iterative.png
+echo #  comparison  : figures\summary_scale_GK_masked.png
+echo #  H-beta fix  : figures\spectra_compare_*_G.png
+echo #  upper bound : figures\real_trained_*.png
+echo #  cross-survey: figures\cross_survey_*.png
+echo #  SHAP        : figures\shap_importance.png
 echo ############################################################
 
 endlocal

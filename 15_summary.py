@@ -111,7 +111,10 @@ def main():
     ap.add_argument("--desi", default="proyecto_desi/espectros_balanceados_desi")
     ap.add_argument("--sdss", default="proyecto_desi/espectros_sdss")
     ap.add_argument("--classes", nargs="+", default=["G", "K"])
-    ap.add_argument("--norm", default="masked", choices=["masked", "iterative", "percentile"])
+    # EN: 'iterative' is the BEST configuration. 'masked' fixed H-beta but over-deepened
+    #     the other lines and made DESI's sim->real WORSE (0.760 -> 0.637) -- kept as a
+    #     documented negative result. ES: 'iterative' es la MEJOR configuracion.
+    ap.add_argument("--norm", default="iterative", choices=["iterative", "masked", "percentile"])
     ap.add_argument("--real-n", type=int, default=400, dest="real_n")
     args = ap.parse_args()
 
@@ -183,11 +186,12 @@ def main():
     ax.set_xticks(x); ax.set_xticklabels(surveys)
     ax.set_ylim(0, 1.08)
     ax.set_ylabel(f"accuracy ({lbl})")
-    ax.set_title("The reference scale: how far is our sim->real model from the ceiling?")
+    ax.set_title("The reference scale: how far is our sim->real model from the ceiling?\n"
+                 f"(normalizer: {args.norm})", fontsize=11)
     ax.legend(loc="lower right", fontsize=9)
     ax.grid(axis="y", alpha=0.3)
     plt.tight_layout()
-    out = f"figures/summary_scale_{''.join(classes)}.png"
+    out = f"figures/summary_scale_{''.join(classes)}_{args.norm}.png"
     plt.savefig(out, dpi=130, bbox_inches="tight")
     plt.close()
     print(f"\nsaved {out}")
