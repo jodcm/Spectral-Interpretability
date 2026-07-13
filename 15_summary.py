@@ -51,42 +51,55 @@ def make_rf(n_estimators=250, seed=23):
                                   n_jobs=-1, random_state=seed)
 
 
-def sim_to_real(npz_path, real_dir, classes, normalizer, real_n):
-    """EN: train on the synthetic .npz, test on the real survey. ES: sim -> real."""
-    from sklearn.metrics import accuracy_score
-    if not (npz_path and os.path.exists(npz_path)) or not os.path.isdir(real_dir):
-        return None
-    d = np.load(npz_path, allow_pickle=True)
-    X = np.asarray(d["X"], dtype=np.float32)
-    y_txt = np.asarray(d["y"]).astype(str)
-    cls = [c for c in classes if c in set(y_txt)]
-    if not cls:
-        return None
-    keep = np.isin(y_txt, cls)
-    ci = {c: i for i, c in enumerate(cls)}
-    rf = make_rf().fit(X[keep], np.array([ci[t] for t in y_txt[keep]]))
-    Xr, yr, _ = P.load_labeled_desi_folder(real_dir, classes=tuple(cls), n_per_class=real_n,
-                                           balanced=True, seed=0, normalizer=normalizer)
-    if len(yr) == 0:
-        return None
-    return float(accuracy_score(np.array([ci[t] for t in yr]), rf.predict(Xr)))
+def evaluate_survey(npz_path, real_dir, classes, normalizer, n, test_size=0.25):
+    """EN: BOTH models evaluated on the IDENTICAL held-out real test set.
 
+        This is the methodologically strict comparison. We first split the real spectra
+        into train (75%) / test (25%). The REAL-trained RF is fitted on the train part.
+        The SIM-trained RF never sees any real spectrum at all. Then BOTH are scored on
+        the SAME held-out real test set -- so the two bars differ only in what the model
+        was trained on, not in what it was tested on.
+    ES: AMBOS modelos evaluados sobre el MISMO conjunto de test real (held-out).
 
-def real_upper_bound(real_dir, classes, normalizer, n, test_size=0.25):
-    """EN: train AND test on the same real survey -> the ceiling. ES: la cota superior."""
+        Es la comparacion estricta. Primero partimos los espectros reales en train (75%) /
+        test (25%). El RF entrenado con REALES se ajusta con la parte train. El RF
+        entrenado con SINTETICOS no ve ningun espectro real. Luego los DOS se evaluan
+        sobre el MISMO test real -- asi las dos barras difieren solo en con que fueron
+        entrenadas, no en donde fueron evaluadas.
+
+    -> (acc_sim_trained, acc_real_trained, rf_real, n_test)
+    """
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import accuracy_score
     if not os.path.isdir(real_dir):
-        return None, None
+        return None, None, None, 0
+
     X, y_txt, _ = P.load_labeled_desi_folder(real_dir, classes=tuple(classes), n_per_class=n,
                                              balanced=True, seed=0, normalizer=normalizer)
     if len(y_txt) < 40:
-        return None, None
+        return None, None, None, 0
     ci = {c: i for i, c in enumerate(classes)}
     y = np.array([ci[t] for t in y_txt])
+
+    # EN: THE common split -- everything below is scored on Xte/yte
+    # ES: EL split comun -- todo se evalua sobre Xte/yte
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=test_size, random_state=23, stratify=y)
-    rf = make_rf().fit(Xtr, ytr)
-    return float(accuracy_score(yte, rf.predict(Xte))), rf
+
+    # --- (2) real-trained (the ceiling) | entrenado con reales (la cota superior)
+    rf_real = make_rf().fit(Xtr, ytr)
+    acc_real = float(accuracy_score(yte, rf_real.predict(Xte)))
+
+    # --- (1) sim-trained, scored on the SAME test set | sobre el MISMO test set
+    acc_sim = None
+    if npz_path and os.path.exists(npz_path):
+        d = np.load(npz_path, allow_pickle=True)
+        Xs = np.asarray(d["X"], dtype=np.float32)
+        ys_txt = np.asarray(d["y"]).astype(str)
+        keep = np.isin(ys_txt, classes)
+        rf_sim = make_rf().fit(Xs[keep], np.array([ci[t] for t in ys_txt[keep]]))
+        acc_sim = float(accuracy_score(yte, rf_sim.predict(Xte)))
+
+    return acc_sim, acc_real, rf_real, len(yte)
 
 
 def cross_survey(rf_a, real_b, classes, normalizer, n):
@@ -125,15 +138,18 @@ def main():
     print(f"classes = {lbl}   normalizer = {args.norm}\n")
 
     res = {}
-    res["desi_sim"] = sim_to_real(args.sim_desi, args.desi, classes, normalizer, args.real_n)
-    res["desi_real"], rf_desi = real_upper_bound(args.desi, classes, normalizer, args.real_n * 2)
-    res["sdss_sim"] = sim_to_real(args.sim_sdss, args.sdss, classes, normalizer, args.real_n)
-    res["sdss_real"], _ = real_upper_bound(args.sdss, classes, normalizer, args.real_n * 2)
+    res["desi_sim"], res["desi_real"], rf_desi, n_desi = evaluate_survey(
+        args.sim_desi, args.desi, classes, normalizer, args.real_n * 2)
+    res["sdss_sim"], res["sdss_real"], _, n_sdss = evaluate_survey(
+        args.sim_sdss, args.sdss, classes, normalizer, args.real_n * 2)
     res["cross"] = cross_survey(rf_desi, args.sdss, classes, normalizer, args.real_n)
 
     def s(v):
         return "  n/a " if v is None else f"{v:.3f}"
 
+    print("=" * 62)
+    print("BOTH models are scored on the SAME held-out REAL test set per survey.")
+    print(f"  DESI test set: N = {n_desi}   |   SDSS test set: N = {n_sdss}")
     print("=" * 62)
     print(f"{'':<34}{'DESI':>12}{'SDSS':>12}")
     print("-" * 62)
@@ -187,7 +203,8 @@ def main():
     ax.set_ylim(0, 1.08)
     ax.set_ylabel(f"accuracy ({lbl})")
     ax.set_title("The reference scale: how far is our sim->real model from the ceiling?\n"
-                 f"(normalizer: {args.norm})", fontsize=11)
+                 f"both bars scored on the SAME held-out real test set "
+                 f"(DESI N={n_desi}, SDSS N={n_sdss})", fontsize=10)
     ax.legend(loc="lower right", fontsize=9)
     ax.grid(axis="y", alpha=0.3)
     plt.tight_layout()

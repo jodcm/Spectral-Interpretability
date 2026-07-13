@@ -227,20 +227,33 @@ def main():
                  "(cyan ticks = known lines of that element)", fontsize=10)
     fig.colorbar(im, ax=ax, pad=0.01, label="sensitivity (row-normalized)")
 
-    # --- the elements with the strongest response, as curves
+    # --- EN: the SAME information as the heatmap, but as curves on ONE COMMON SCALE.
+    #     Every curve is divided by the SAME number (the global maximum), so the heights
+    #     are directly comparable. That is the whole point: the elements WITHOUT lines in
+    #     this window must lie flat on zero next to the ones that do have lines.
+    #     ES: la MISMA informacion que el heatmap, pero como curvas en UNA ESCALA COMUN.
     ax = fig.add_subplot(gs[2])
+    gmax = Smat.max() + 1e-12                      # EN/ES: one common divisor
+    colors = {"Fe": "#1f77b4", "C": "#ff7f0e", "Mg": "#2ca02c",
+              "Ca": "#9467bd", "Ti": "#8c564b", "Mn": "#e377c2"}
     for el in rows[:3]:
         i = P.VARIED_ELEMENTS.index(el)
-        ax.plot(wave, Smat[i] / (Smat[i].max() + 1e-12), lw=1.1, label=el)
+        ax.plot(wave, Smat[i] / gmax, lw=1.0, color=colors.get(el),
+                label=f"{el} (has lines here)")
     for el in ("Na", "S", "N", "K"):
         if el in P.VARIED_ELEMENTS:
             i = P.VARIED_ELEMENTS.index(el)
-            ax.plot(wave, Smat[i] / (strongest / len(wave) * 50 + 1e-12), lw=0.8, alpha=0.5,
-                    ls=":", label=f"{el} (no lines here)")
+            ax.plot(wave, Smat[i] / gmax, lw=1.4, ls="-", alpha=0.95,
+                    color="crimson" if el == "Na" else "grey",
+                    label=f"{el} (NO lines here)")
+    ax.axhline(0, color="black", lw=0.6)
     ax.set_xlim(P.WMIN, P.WMAX)
-    ax.set_xlabel(r"Wavelength [$\AA$]"); ax.set_ylabel("rel. sensitivity")
-    ax.set_title("Top-3 responding elements vs the elements that have NO lines here", fontsize=10)
-    ax.legend(fontsize=8, ncol=4)
+    ax.set_ylim(-0.02, 1.05)
+    ax.set_xlabel(r"Wavelength [$\AA$]")
+    ax.set_ylabel("sensitivity\n(common scale)")
+    ax.set_title("Same scale for all: elements WITH lines here (colour) vs elements "
+                 "WITHOUT lines here (red/grey, flat on zero)", fontsize=10)
+    ax.legend(fontsize=8, ncol=4, loc="upper right")
 
     out = f"figures/emulator_sensitivity_{args.cls}.png"
     plt.savefig(out, dpi=130, bbox_inches="tight")
